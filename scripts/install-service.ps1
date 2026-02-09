@@ -1,6 +1,7 @@
 param(
     [string]$ServiceName = 'ConstituteGateway',
-    [string]$NssmPath = '.\\nssm\\nssm.exe'
+    [string]$NssmPath = '.\nssm\nssm.exe',
+    [string]$Zone = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,7 +63,7 @@ if (-not (Test-Path $bin)) {
         Write-Host "Release build failed. This is commonly caused by Windows exploit protection flagging Rust build scripts (proc-macro2)."
         Write-Host "If you see T1059 detections, temporarily disable exploit protection for rustc/cargo or allow-list the toolchain paths."
         Write-Host "Retrying with short target dir..."
-        $shortDir = 'C:\\tmp\\cg-target'
+        $shortDir = 'C:\tmp\cg-target'
         New-Item -ItemType Directory -Force -Path $shortDir | Out-Null
         if (-not (Build-Release $shortDir)) {
             throw "cargo build failed (even with short target dir)."
@@ -80,6 +81,20 @@ if (-not (Test-Path $config)) {
         Copy-Item $configExample $config
     } else {
         throw "config.json missing and no config.example.json to copy"
+    }
+}
+
+$dataDir = Join-Path $env:ProgramData 'Constitute\Gateway\data'
+$zoneSeed = Join-Path $dataDir 'zone.seed'
+if (-not (Test-Path $zoneSeed)) {
+    if (-not $Zone) {
+        if ($Host -and $Host.UI -and $Host.UI.RawUI) {
+            $Zone = Read-Host 'Enter zone key (leave empty to generate default)'
+        }
+    }
+    if ($Zone) {
+        New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+        Set-Content -Path $zoneSeed -Value $Zone -NoNewline
     }
 }
 

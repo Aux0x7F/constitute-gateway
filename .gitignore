@@ -8,3 +8,10 @@ SHA256SUMS
 config.json
 **/*.rs.bk
 .DS_Store
+
+keystore.json
+keystore.key
+
+
+zone.seed
+

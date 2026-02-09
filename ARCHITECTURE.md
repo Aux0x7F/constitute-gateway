@@ -26,6 +26,24 @@ The gateway **uses the same identity model and event schemas** as the web stack:
 - All discovery events are **signed**.
 - The private key is stored locally and never exported by default.
 
+## Key Storage
+Keys and sensitive state are stored in an encrypted keystore under `data_dir`.
+
+Sensitive fields stored in the keystore:
+- `nostr_pubkey`, `nostr_sk_hex`
+- `identity_id`, `device_label`
+- `zones`
+
+Key source order:
+1. OS keyring (preferred)
+2. Passphrase from env: `CONSTITUTE_GATEWAY_PASSPHRASE`
+3. Local fallback key file (`keystore.key`)
+
+To disable keyring:
+```
+CONSTITUTE_GATEWAY_NO_KEYRING=1
+```
+
 ## Event Schemas (Current)
 ### Swarm Discovery Record
 - `kind`: `30078`
@@ -41,7 +59,7 @@ The gateway **uses the same identity model and event schemas** as the web stack:
 
 ### Zone Presence
 - `kind`: `1`
-- `tags`: `['t','constitute']`, `['z', '<zone_key>']`
+- `tags`: `['t','constitute']`, `['z','<zone_key>']`
 - `content` (JSON):
   - `type: 'zone_presence'`
   - `zone`
@@ -59,20 +77,19 @@ The gateway **uses the same identity model and event schemas** as the web stack:
 ## Configuration
 - `config.example.json` is a template.
 - `config.json` is generated at runtime and **gitignored**.
-- Minimal required fields:
-  - `nostr_relays`
-  - `nostr_sk_hex` (auto-generated if missing)
-  - `zones` (auto-generated if missing)
+- Plaintext config includes only operational settings (bind, relays).
+- Sensitive config is stored in the encrypted keystore.
 
 ## Security Posture
 Current guarantees:
 - Signed discovery events.
+- Keys are encrypted at rest.
 - Minimal data stored locally.
 
 Planned hardening:
 - Replay protection + timestamp skew checks (match web).
 - Config integrity checks.
-- Optional key encryption at rest.
+- Optional key encryption at rest (keyring + KDF fallback).
 
 ## Roadmap
 ### Phase 0: Bootstrap Parity (in progress)

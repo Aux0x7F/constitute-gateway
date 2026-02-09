@@ -24,6 +24,7 @@ Native gateway service for Constitute. Runs headless on Ubuntu Core, Raspberry P
 ## Project Layout
 - src/main.rs: config, startup, service orchestration
 - src/nostr.rs: keypair + NIP-01 signing
+- src/keystore.rs: encrypted key storage (keyring + fallback)
 - src/discovery.rs: swarm device records + zone presence
 - src/relay.rs: relay pool + websocket publishing
 - src/transport.rs: UDP listener + QUIC stub
@@ -84,10 +85,31 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -ServiceN
 ## Configuration
 `config.example.json` is a template. `config.json` is generated at runtime and gitignored.
 
-Key fields:
-- `nostr_relays`: discovery bootstrap relays
-- `nostr_pubkey` / `nostr_sk_hex`: gateway identity (auto-generated if missing)
-- `zones`: zone keys + labels (auto-generated if missing)
+Plaintext config includes only operational settings (bind, relays, logging). Sensitive fields are stored in the encrypted keystore.
+
+Startup self-test:
+- self_test (bool, default true) publishes a signed test event and waits for OK/echo
+- self_test_timeout_secs (default 8) controls the per-relay wait time
+
+## Key Storage
+Keys and sensitive state are stored in an encrypted keystore under `data_dir`:
+- `keystore.json`: encrypted payload
+- `keystore.key`: fallback raw key (created only if no keyring/passphrase)
+
+Sensitive fields stored in the keystore:
+- `nostr_pubkey`, `nostr_sk_hex`
+- `identity_id`, `device_label`
+- `zones`
+
+Key source order:
+1. OS keyring (preferred)
+2. Passphrase from environment: `CONSTITUTE_GATEWAY_PASSPHRASE`
+3. Local key file fallback (`keystore.key`)
+
+To disable keyring (e.g., Ubuntu Core confinement):
+```
+CONSTITUTE_GATEWAY_NO_KEYRING=1
+```
 
 ## CI/CD
 GitHub Actions builds on push and PRs:
@@ -106,7 +128,7 @@ Release builds on tags (`v*`) and publish to GitHub Releases with checksums.
 
 ## Security Hardening Checklist
 Planned hardening (tracked in ARCHITECTURE.md):
-- [ ] Encrypted key storage at rest
+- [ ] Encrypted key storage at rest (keyring + KDF fallback)
 - [ ] Replay protection + timestamp skew checks
 - [ ] Relay rate limiting
 - [ ] Config integrity validation
@@ -131,3 +153,4 @@ Planned hardening (tracked in ARCHITECTURE.md):
 
 ## License
 TBD
+
