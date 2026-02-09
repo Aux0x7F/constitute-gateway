@@ -1,0 +1,13 @@
+{
+  "node_id": "gateway-1",
+  "node_type": "gateway",
+  "bind": "0.0.0.0:4040",
+  "data_dir": "./data",
+  "nostr_relays": [
+    "wss://relay.example"
+  ],
+  "stun_servers": [
+    "stun:stun.l.google.com:19302"
+  ],
+  "turn_servers": []
+}

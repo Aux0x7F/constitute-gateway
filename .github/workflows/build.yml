@@ -1,0 +1,63 @@
+name: build-artifacts
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+jobs:
+  snap:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install snapcraft
+        run: sudo snap install snapcraft --classic
+
+      - name: Build snap
+        run: make snap-ci
+
+      - name: Upload snap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: constitute-gateway-snap
+          path: "*.snap"
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (Windows)
+        run: cargo build --release --features platform-windows
+
+      - name: Download NSSM
+        shell: pwsh
+        run: |
+          $url = 'https://nssm.cc/release/nssm-2.24.zip'
+          Invoke-WebRequest -Uri $url -OutFile nssm.zip
+          Expand-Archive nssm.zip -DestinationPath nssm
+
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item target\release\constitute-gateway.exe dist\constitute-gateway.exe
+          Copy-Item config.example.json dist\config.json
+          Copy-Item README.md dist\README.md
+          New-Item -ItemType Directory -Force -Path dist\nssm | Out-Null
+          Copy-Item nssm\nssm-2.24\win64\nssm.exe dist\nssm\nssm.exe
+          Copy-Item -Recurse -Force scripts dist\scripts
+          Compress-Archive -Path dist\* -DestinationPath constitute-gateway-windows.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: constitute-gateway-windows
+          path: constitute-gateway-windows.zip
