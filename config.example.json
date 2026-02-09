@@ -1,13 +1,27 @@
 {
-  "node_id": "gateway-1",
-  "node_type": "gateway",
   "bind": "0.0.0.0:4040",
   "data_dir": "./data",
   "nostr_relays": [
-    "wss://relay.example"
+    "wss://relay.snort.social"
   ],
+  "advertise_relays": [
+    "wss://relay.snort.social"
+  ],
+  "nostr_pubkey": "",
+  "nostr_sk_hex": "",
+  "identity_id": "",
+  "device_label": "",
+  "nostr_kind": 30078,
+  "nostr_tag": "swarm_discovery",
+  "nostr_publish_interval_secs": 30,
   "stun_servers": [
     "stun:stun.l.google.com:19302"
   ],
-  "turn_servers": []
+  "turn_servers": [],
+  "zones": [
+    {
+      "key": "",
+      "name": "Default"
+    }
+  ]
 }

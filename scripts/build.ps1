@@ -17,8 +17,8 @@ function Invoke-WslSnapBuild([string]$repoPath) {
 
 if ($Target -eq 'auto') {
     if ($IsWindows) {
-        Write-Host "Detected Windows. Building Windows binary."
-        cargo build --features platform-windows
+        Write-Host "Detected Windows. Building Windows binary (release)."
+        cargo build --release --features platform-windows
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         Write-Host "To build snap from Windows, run: .\\scripts\\build.ps1 -Target snap"
         exit 0
@@ -33,7 +33,7 @@ if ($Target -eq 'windows') {
         Write-Error "windows target is only supported on Windows hosts."
         exit 1
     }
-    cargo build --features platform-windows
+    cargo build --release --features platform-windows
     exit $LASTEXITCODE
 }
 

@@ -1,11 +1,14 @@
 use std::path::PathBuf;
 
+#[cfg(all(feature = "platform-linux", feature = "platform-windows"))]
+compile_error!("features platform-linux and platform-windows are mutually exclusive");
+
 #[cfg(feature = "platform-linux")]
 pub fn init() {
     tracing::info!("platform init: linux (ubuntu core)");
 }
 
-#[cfg(feature = "platform-windows")]
+#[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
 pub fn init() {
     tracing::info!("platform init: windows");
 }
@@ -20,7 +23,7 @@ pub fn default_data_dir() -> String {
     "/var/snap/constitute-gateway/common/data".to_string()
 }
 
-#[cfg(feature = "platform-windows")]
+#[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
 pub fn default_data_dir() -> String {
     std::env::var("ProgramData")
         .map(|root| format!("{}\\Constitute\\Gateway\\data", root))
@@ -37,7 +40,7 @@ pub fn default_config_path() -> PathBuf {
     "/var/snap/constitute-gateway/common/config.json".into()
 }
 
-#[cfg(feature = "platform-windows")]
+#[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
 pub fn default_config_path() -> PathBuf {
     std::env::var("ProgramData")
         .map(|root| PathBuf::from(format!("{}\\Constitute\\Gateway\\config.json", root)))

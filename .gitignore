@@ -1,3 +1,10 @@
 /target
+/dist
+/nssm
+/.nssm-tmp
+*.zip
+*.snap
+SHA256SUMS
+config.json
 **/*.rs.bk
 .DS_Store

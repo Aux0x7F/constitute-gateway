@@ -1,148 +1,133 @@
 # Constitute Gateway
 
-Native gateway service for Constitute. This service is intended to run on Ubuntu Core (Raspberry Pi, VPS, or other small nodes) and provide secure relay and discovery services for browser clients.
+Native gateway service for Constitute. Runs headless on Ubuntu Core, Raspberry Pi, or VPS nodes to provide discovery bootstrap and relay services for browser peers.
 
 ## Status
-Skeleton scaffold. Networking, relay, and auth logic are not implemented yet.
+- Prototype: active development
+- Discovery bootstrap aligned with web standard
+- P0: native gateway backbone (this repo)
+- P1: gateway relay + signaling
+- P2: browser swarm transport
 
-## CI/CD
-GitHub Actions builds:
-- Ubuntu Core snap (Linux)
-- Windows ZIP artifact
+## Key Concepts
+- Gateway: native node bridging discovery and transport
+- Device identity: Nostr keypair used for gateway identity
+- Zone: discovery scope joined by a shareable key
+- Swarm discovery: signed records for identity/device resolution
 
-Tagged releases (`v*`) publish both assets to GitHub Releases with checksums.
+## Features
+- Nostr keypair generation and signed discovery events
+- Zone presence broadcasts compatible with web repo
+- UDP/QUIC stubs for future transport
+- Windows service install + Ubuntu Core snap scaffolding
 
-## Goals
-- Small, secure, headless service.
-- Runs on Ubuntu Core with minimal dependencies.
-- Supports discovery bootstrap and relay for browser peers.
+## Project Layout
+- src/main.rs: config, startup, service orchestration
+- src/nostr.rs: keypair + NIP-01 signing
+- src/discovery.rs: swarm device records + zone presence
+- src/relay.rs: relay pool + websocket publishing
+- src/transport.rs: UDP listener + QUIC stub
+- ARCHITECTURE.md: system architecture and roadmap
 
-## Discovery Record
-Discovery records include a `type` field to distinguish node roles:
-- `relay`
-- `gateway`
-- `browser`
-- `native`
+## Architecture
+See `ARCHITECTURE.md` for the full system overview and roadmap.
 
-This allows a single nostr discovery channel with filtering by role.
+## Discovery Schema (Aligned With Web)
+### Swarm Discovery Record
+- `kind`: `30078`
+- tags: `['t','swarm_discovery']`, `['type','device']`
+- `content` (JSON): `devicePk`, `identityId`, `deviceLabel`, `updatedAt`, `expiresAt`, `role`, `relays`
+
+### Zone Presence
+- `kind`: `1`
+- tags: `['t','constitute']`, `['z','<zone_key>']`
+- `content.type`: `zone_presence`
+- `content.devicePk`: gateway nostr pubkey
 
 ## Build
-This repo targets Linux (Ubuntu Core). Suggested build targets:
-- `x86_64-unknown-linux-gnu` for VPS or desktop Linux
-- `aarch64-unknown-linux-gnu` for Raspberry Pi 4/5
-
-### Feature flags
-- `platform-linux` (default)
+Feature flags (mutually exclusive):
+- `platform-linux`
 - `platform-windows`
 
-Use the flags to compile platform-specific hooks:
-
 ```bash
-cargo build --features platform-windows
 cargo build --features platform-linux
-```
-
-### Native build on Linux
-```bash
-cargo build --release
-```
-
-### Cross-compile from Windows
-Cross-compiling requires a Linux linker toolchain for the target. The cleanest path is WSL or a Linux container.
-
-```bash
-cargo build --release --target aarch64-unknown-linux-gnu
+cargo build --features platform-windows
 ```
 
 ### Ubuntu Core snap build
-Ubuntu Core uses snaps. This repo includes `snap/snapcraft.yaml` and a Makefile target.
-
 ```bash
 make snap
 ```
-
 CI runs `make snap-ci`.
 
-On Windows, run snapcraft inside WSL2/Ubuntu or a Linux VM.
-
-### Unified build script
-For a clean, cross-platform entrypoint:
-
-Windows (PowerShell):
-```powershell
-.\scripts\build.ps1 -Target auto
-.\scripts\build.ps1 -Target windows
-.\scripts\build.ps1 -Target snap
-```
-
-Linux (bash):
-```bash
-./scripts/build.sh auto
-./scripts/build.sh snap
-```
-
-On Windows, `-Target snap` uses WSL to run `make snap`.
-
 ## Install (Ubuntu Core)
-One-liner install from GitHub Releases:
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/install-latest.sh | bash
 ```
 
 ## Windows install (one-liner)
-Downloads, verifies, extracts, and installs the service:
-
 ```powershell
 irm https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/install-latest.ps1 | iex
 ```
 
 ## Local install from clone (Windows)
-Run from a local clone to install and start the service:
-
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\install-service.ps1 -ServiceName ConstituteGateway -NssmPath .\nssm\nssm.exe
 ```
 
-## Updates
-Use GitHub Releases or CI artifacts for distribution. A helper script is included:
-
+## Local run (Windows)
 ```powershell
-.\scripts\check-update.ps1 -RepoOwner Aux0x7F -RepoName constitute-gateway
-```
-
-## Run
-```bash
-./target/release/constitute-gateway --config config.json
+.\scripts\build.ps1 -Target windows
+.\scripts\run.ps1 -LogLevel warn
 ```
 
 ## Configuration
-Copy `config.example.json` to `config.json` and adjust:
-- `node_id`: stable identifier for this gateway
-- `node_type`: `gateway` by default; other roles are `relay`, `browser`, `native`
-- `bind`: host:port to listen on
-- `data_dir`: data directory for local storage
+`config.example.json` is a template. `config.json` is generated at runtime and gitignored.
+
+Key fields:
 - `nostr_relays`: discovery bootstrap relays
-- `stun_servers`: STUN servers for NAT traversal
-- `turn_servers`: TURN relays (optional)
+- `nostr_pubkey` / `nostr_sk_hex`: gateway identity (auto-generated if missing)
+- `zones`: zone keys + labels (auto-generated if missing)
 
-## Logging
-Default log level is `warn`. Override via `--log-level` or `RUST_LOG`.
+## CI/CD
+GitHub Actions builds on push and PRs:
+- Windows ZIP artifact (binary + NSSM helper)
+- Ubuntu Core snap
 
-Examples:
-```bash
-./constitute-gateway --log-level info
-RUST_LOG=debug ./constitute-gateway
-```
+Release builds on tags (`v*`) and publish to GitHub Releases with checksums.
 
-## Platform defaults
-The gateway uses platform-specific default paths when `--config` is not provided.
-- Linux (Ubuntu Core): `/var/snap/constitute-gateway/common/config.json`
-- Windows: `%ProgramData%\\Constitute\\Gateway\\config.json`
+## Release Policy
+- Use semantic version tags: `vMAJOR.MINOR.PATCH`
+- Releases include:
+  - `constitute-gateway-windows.zip`
+  - `constitute-gateway-linux-amd64.snap`
+  - `SHA256SUMS`
+- Artifacts are signed only by GitHub’s release integrity (no extra signing yet).
 
-Data directory defaults follow the same platform roots.
+## Security Hardening Checklist
+Planned hardening (tracked in ARCHITECTURE.md):
+- [ ] Encrypted key storage at rest
+- [ ] Replay protection + timestamp skew checks
+- [ ] Relay rate limiting
+- [ ] Config integrity validation
+- [ ] Service sandboxing / least-privilege defaults
+- [ ] Audit logging
 
-## Notes
-- Ubuntu Core image packaging and hardening are tracked in the Constitute roadmap.
-- The gateway will eventually provide relay, discovery, and authenticated envelopes.
-- If `cargo check` fails on Windows, build inside WSL2/Ubuntu or a Linux container.
+## Roadmap Snapshot
+- P0: discovery parity with web (signed records, zone presence)
+- P1: gateway relay + signaling (WebRTC offer/answer/ICE)
+- P2: browser swarm transport (TURN fallback)
+- P3: refactor + hardening
+
+## TODO
+- Relay signaling channels and auth envelope
+- Swarm transport integration
+- Hardened Ubuntu Core image + service packaging
+
+## Security Notes
+- Gateway identity is a Nostr keypair stored locally
+- All discovery events are signed
+- Relays are transport only (no trust assumed)
+
+## License
+TBD
