@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey};
+use secp256k1::schnorr::Signature;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -96,7 +97,32 @@ pub fn frame_req(sub_id: &str, filters: Vec<NostrFilter>) -> String {
     serde_json::to_string(&json!(["REQ", sub_id, filters])).unwrap_or_else(|_| "[]".to_string())
 }
 
-fn event_id_hex(unsigned: &NostrUnsignedEvent) -> Result<String> {
+
+
+pub fn verify_event(ev: &NostrEvent) -> Result<bool> {
+    let unsigned = NostrUnsignedEvent {
+        pubkey: ev.pubkey.clone(),
+        created_at: ev.created_at,
+        kind: ev.kind,
+        tags: ev.tags.clone(),
+        content: ev.content.clone(),
+    };
+    let expected_id = event_id_hex(&unsigned)?;
+    if expected_id != ev.id {
+        return Ok(false);
+    }
+    let hash = hex_to_bytes(&ev.id)?;
+    if hash.len() != 32 {
+        return Err(anyhow!("invalid event id"));
+    }
+    let sig_bytes = hex_to_bytes(&ev.sig)?;
+    let sig = Signature::from_slice(&sig_bytes).map_err(|_| anyhow!("invalid signature"))?;
+    let pk_bytes = hex_to_bytes(&ev.pubkey)?;
+    let pk = XOnlyPublicKey::from_slice(&pk_bytes).map_err(|_| anyhow!("invalid pubkey"))?;
+    let secp = Secp256k1::new();
+    Ok(secp.verify_schnorr(&sig, &hash, &pk).is_ok())
+}
+pub fn event_id_hex(unsigned: &NostrUnsignedEvent) -> Result<String> {
     let content = json!([
         0,
         unsigned.pubkey,

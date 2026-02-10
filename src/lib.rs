@@ -3,5 +3,7 @@ pub mod keystore;
 pub mod nostr;
 pub mod platform;
 pub mod relay;
+pub mod local_relay;
 pub mod transport;
+pub mod swarm_store;
 pub mod util;

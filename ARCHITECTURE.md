@@ -17,8 +17,10 @@ The gateway **uses the same identity model and event schemas** as the web stack:
 ## Core Responsibilities
 1. **Discovery bootstrapping** via Nostr relays.
 2. **Swarm peer presence** via zone presence events.
-3. **WebRTC signaling relay** for browser peers (future work).
-4. **Minimal local UDP/transport surfaces** for native/native mesh (future work).
+3. **Local gateway relay** for browser peers (Nostr-compatible; WS/WSS).
+4. **Swarm record store** for identity/device records (DHT seed).
+5. **UDP handshake + peer table** for native/native mesh (in progress).
+5. **STUN-based external endpoint discovery** for swarm advertisement (in progress).
 
 ## Identity and Keys
 - On first run, the gateway generates a **Nostr keypair** and persists it.
@@ -55,7 +57,8 @@ CONSTITUTE_GATEWAY_NO_KEYRING=1
   - `updatedAt`
   - `expiresAt`
   - `role` (gateway)
-  - `relays` (advertised relays for discovery / bootstrap)
+  - `relays` (gateway relay endpoints)
+  - `metrics` (clients, cpuPct, memPct, loadPct, memUsedMb, memTotalMb, ts)
 
 ### Zone Presence
 - `kind`: `1`
@@ -64,11 +67,25 @@ CONSTITUTE_GATEWAY_NO_KEYRING=1
   - `type: 'zone_presence'`
   - `zone`
   - `devicePk`
-  - `swarm` (placeholder; future swarm address)
+  - `swarm` (UDP endpoint host:port when advertised; discovered via STUN)
+  - `role` (gateway)
+  - `relays` (gateway relay endpoints)
+  - `metrics` (clients, cpuPct, memPct, loadPct, memUsedMb, memTotalMb, ts)
   - `ts`
   - `ttl`
 
 ## Zones
+
+## Zone-Scoped Gossip
+- UDP gossip is **zone-scoped**; records include a `zone` and are ignored outside that zone.
+- Gateways may join multiple zones; records are stored per-zone and never auto-bridged across zones.
+
+## Communities and Coalitions (Future Model)
+- **Communities** are overlay networks that can span zones via explicit routing invites.
+- **Coalitions** group multiple communities and can define shared interop channels.
+- Interop channels can be modeled as **shared rendezvous zones** with explicit membership.
+- Cross-zone routing is opt-in and permissioned to avoid discovery metadata leakage.
+
 - Zone keys are generated with the **same algorithm as web**:
   - `sha256(label|b64url(random(8)))` then `slice(0, 20)` (URL-safe base64)
 - Gateway creates a default zone if none are configured and persists the generated key.
@@ -80,14 +97,34 @@ CONSTITUTE_GATEWAY_NO_KEYRING=1
 - Plaintext config includes only operational settings (bind, relays).
 - Sensitive config is stored in the encrypted keystore.
 
+## Host Hardening (Ops)
+- Snap confinement provides AppArmor + seccomp by default.
+- Host firewalling and SSH hardening remain outside the snap.
+- Recommended: lock inbound ports to the gateway relay + swarm UDP only.
+- Fail2ban on classic Ubuntu/VPS; Ubuntu Core uses snap refresh for updates.
+
+## Threat Model / Privacy Assumptions
+We assume a high-surveillance ("big brother") environment. Discovery is public by design, and relay metadata can be observed or correlated.
+
+Operational guidance:
+- Community operators should use VPN/tunnels for gateways when their risk profile or zones require anonymity.
+- STUN will reflect the active egress path (VPN public IP if full-tunnel; ISP IP if not).
+- Prefer WSS when feasible to reduce passive metadata exposure.
+
+## Application-Layer Security
+Identity-level and above abstractions (communities, chat, app data) must be end-to-end encrypted.
+Transport (relay/WS/UDP) is a delivery substrate, not a trust boundary.
+
 ## Security Posture
 Current guarantees:
 - Signed discovery events.
 - Keys are encrypted at rest.
 - Minimal data stored locally.
+- Relay rebroadcast is deduped by event id.
+- Relay validates NIP-01 signatures + replay window (created_at + payload ts/ttl).
+- Swarm record store validates + gossips identity/device records over UDP.
 
 Planned hardening:
-- Replay protection + timestamp skew checks (match web).
 - Config integrity checks.
 - Optional key encryption at rest (keyring + KDF fallback).
 
@@ -95,8 +132,9 @@ Planned hardening:
 ### Phase 0: Bootstrap Parity (in progress)
 - [x] Nostr keypair generation and signed events
 - [x] Zone presence and discovery record alignment
+- [x] Local gateway relay (Nostr-compatible)
 - [ ] WebRTC signaling relay (offer/answer/ICE pass-through)
-- [ ] Basic metrics/health reporting
+- [x] Basic metrics/health reporting
 
 ### Phase 1: Swarm Transport
 - [ ] Stable mesh transport (initial WebRTC + relay)
@@ -113,6 +151,10 @@ Planned hardening:
 - [ ] Shared identity record resolution
 - [ ] Zone membership sync + presence durability
 
+### Future Milestone: Managed Gateways
+- [ ] Identity-owned gateway fleet (configuration + health via web UI)
+- [ ] Client-consumable health/metrics for relay selection + balancing
+
 ## Non-Goals (for now)
 - Full messaging or application data transport
 - Centralized account systems
@@ -122,4 +164,6 @@ Planned hardening:
 - Long-term swarm transport layer (QUIC, RTC, or hybrid)
 - Relay trust model and rate limiting
 - Zone membership ACLs vs discovery openness
+
+
 

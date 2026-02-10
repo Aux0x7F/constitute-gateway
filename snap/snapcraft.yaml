@@ -13,6 +13,11 @@ confinement: strict
 apps:
   gateway:
     command: bin/constitute-gateway
+    daemon: simple
+    restart-condition: on-failure
+    restart-delay: 5s
+    start-timeout: 30s
+    stop-timeout: 10s
     plugs:
       - network
       - network-bind

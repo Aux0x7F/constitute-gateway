@@ -4,18 +4,31 @@ use tokio::time::{sleep, Duration};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 
+#[derive(Clone, Debug)]
 pub struct RelayPool {
     relays: Vec<RelayHandle>,
 }
 
 impl RelayPool {
-    pub async fn new(relay_urls: Vec<String>, filters_json: String) -> Self {
+    pub async fn new(
+        relay_urls: Vec<String>,
+        filters_json: String,
+        inbound: Option<mpsc::UnboundedSender<String>>,
+    ) -> Self {
         let mut relays = Vec::new();
         for url in relay_urls {
-            let handle = RelayHandle::spawn(url, filters_json.clone());
+            let handle = RelayHandle::spawn(url, filters_json.clone(), inbound.clone());
             relays.push(handle);
         }
         Self { relays }
+    }
+
+    pub fn empty() -> Self {
+        Self { relays: Vec::new() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.relays.is_empty()
     }
 
     pub fn broadcast(&self, frame_json: &str) {
@@ -25,12 +38,13 @@ impl RelayPool {
     }
 }
 
+#[derive(Clone, Debug)]
 struct RelayHandle {
     tx: mpsc::UnboundedSender<String>,
 }
 
 impl RelayHandle {
-    fn spawn(url: String, filters_json: String) -> Self {
+    fn spawn(url: String, filters_json: String, inbound: Option<mpsc::UnboundedSender<String>>) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {
             loop {
@@ -57,6 +71,9 @@ impl RelayHandle {
                                 msg = read.next() => {
                                     match msg {
                                         Some(Ok(Message::Text(txt))) => {
+                                            if let Some(tx) = inbound.as_ref() {
+                                                let _ = tx.send(txt.clone());
+                                            }
                                             tracing::debug!(relay = %url, frame = %txt, "relay rx");
                                         }
                                         Some(Ok(_)) => {}
@@ -80,4 +97,3 @@ impl RelayHandle {
         Self { tx }
     }
 }
-

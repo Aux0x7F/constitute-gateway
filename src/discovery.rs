@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use tokio::sync::watch;
 
 use crate::nostr;
 use crate::relay;
@@ -12,6 +13,22 @@ const APP_KIND: u32 = 1;
 const APP_TAG: &str = "constitute";
 const SUB_ID: &str = "constitute_sub_v2";
 const RECORD_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+pub fn relay_req_json() -> String {
+    let filters = vec![
+        nostr::NostrFilter {
+            kinds: Some(vec![APP_KIND]),
+            t: Some(vec![APP_TAG.to_string()]),
+            z: None,
+        },
+        nostr::NostrFilter {
+            kinds: Some(vec![DEFAULT_RECORD_KIND]),
+            t: Some(vec![DEFAULT_RECORD_TAG.to_string()]),
+            z: None,
+        },
+    ];
+    nostr::frame_req(SUB_ID, filters)
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -32,6 +49,18 @@ impl std::fmt::Display for NodeType {
         };
         f.write_str(s)
     }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayMetrics {
+    pub clients: u64,
+    pub cpu_pct: f32,
+    pub mem_pct: f32,
+    pub mem_used_mb: u64,
+    pub mem_total_mb: u64,
+    pub load_pct: f32,
+    pub ts: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -74,69 +103,65 @@ struct ZonePresencePayload {
     zone: String,
     device_pk: String,
     swarm: String,
+    role: String,
+    #[serde(default)]
+    relays: Vec<String>,
+    #[serde(default)]
+    metrics: Option<GatewayMetrics>,
     ts: u64,
     ttl: u64,
 }
 
 #[derive(Clone, Debug)]
 pub struct DiscoveryClient {
-    relays: Vec<String>,
+    pool: relay::RelayPool,
     device_record: SwarmDeviceRecord,
     nostr_pubkey: String,
     nostr_sk_hex: String,
     publish_interval: Duration,
     zones: Vec<String>,
+    swarm_endpoint_rx: watch::Receiver<String>,
+    metrics_rx: watch::Receiver<GatewayMetrics>,
 }
 
 impl DiscoveryClient {
     pub fn new(
-        relays: Vec<String>,
+        pool: relay::RelayPool,
         device_record: SwarmDeviceRecord,
         nostr_pubkey: String,
         nostr_sk_hex: String,
         publish_interval: Duration,
         zones: Vec<String>,
+        swarm_endpoint_rx: watch::Receiver<String>,
+        metrics_rx: watch::Receiver<GatewayMetrics>,
     ) -> Self {
         Self {
-            relays,
+            pool,
             device_record,
             nostr_pubkey,
             nostr_sk_hex,
             publish_interval,
             zones,
+            swarm_endpoint_rx,
+            metrics_rx,
         }
     }
 
     pub async fn run(self) -> Result<()> {
-        if self.relays.is_empty() {
+        if self.pool.is_empty() {
             return Ok(());
         }
-
-        let filters = vec![
-            nostr::NostrFilter {
-                kinds: Some(vec![APP_KIND]),
-                t: Some(vec![APP_TAG.to_string()]),
-                z: None,
-            },
-            nostr::NostrFilter {
-                kinds: Some(vec![DEFAULT_RECORD_KIND]),
-                t: Some(vec![DEFAULT_RECORD_TAG.to_string()]),
-                z: None,
-            },
-        ];
-        let req = nostr::frame_req(SUB_ID, filters);
-        let pool = relay::RelayPool::new(self.relays.clone(), req).await;
 
         let mut ticker = tokio::time::interval(self.publish_interval);
         loop {
             ticker.tick().await;
             if let Ok(payload) = self.device_record_json() {
-                pool.broadcast(&payload);
+                self.pool.broadcast(&payload);
             }
 
             for zone in &self.zones {
                 if let Ok(msg) = self.zone_presence_json(zone) {
-                    pool.broadcast(&msg);
+                    self.pool.broadcast(&msg);
                 }
             }
         }
@@ -154,6 +179,7 @@ impl DiscoveryClient {
         let tags = vec![
             vec!["t".to_string(), DEFAULT_RECORD_TAG.to_string()],
             vec!["type".to_string(), "device".to_string()],
+            vec!["role".to_string(), self.device_record.role.clone()],
         ];
         let content = self.device_record.to_json();
         let unsigned = nostr::build_unsigned_event(
@@ -168,11 +194,15 @@ impl DiscoveryClient {
     }
 
     fn zone_presence_json(&self, zone: &str) -> Result<String> {
+        let swarm_endpoint = self.swarm_endpoint_rx.borrow().clone();
         let payload = ZonePresencePayload {
             kind: "zone_presence".to_string(),
             zone: zone.to_string(),
             device_pk: self.nostr_pubkey.clone(),
-            swarm: "".to_string(),
+            swarm: swarm_endpoint,
+            role: self.device_record.role.clone(),
+            relays: self.device_record.relays.clone(),
+            metrics: Some(self.metrics_rx.borrow().clone()),
             ts: util::now_unix_seconds() * 1000,
             ttl: 120,
         };
