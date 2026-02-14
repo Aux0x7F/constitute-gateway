@@ -8,23 +8,26 @@ on:
   workflow_dispatch: {}
 
 jobs:
-  snap:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install snapcraft
-        run: sudo snap install snapcraft --classic
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build snap
-        run: make snap-ci
+      - name: Build (Linux)
+        run: cargo build --release --features platform-linux
 
-      - name: Upload snap artifact
+      - name: Package Linux artifact
+        run: bash scripts/linux/package.sh
+
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: constitute-gateway-snap
-          path: "*.snap"
+          name: constitute-gateway-linux
+          path: constitute-gateway-linux-amd64.tar.gz
 
   windows:
     runs-on: windows-latest
@@ -80,3 +83,4 @@ jobs:
         with:
           name: constitute-gateway-windows
           path: constitute-gateway-windows.zip
+

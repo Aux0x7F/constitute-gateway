@@ -24,4 +24,5 @@ if ($expected.Trim() -ne $hashLine.Trim()) { throw "Checksum mismatch for $zipNa
 if (Test-Path $extractDir) { Remove-Item -Recurse -Force $extractDir }
 Expand-Archive $zipPath -DestinationPath $extractDir
 
-& powershell -ExecutionPolicy Bypass -File (Join-Path $extractDir 'scripts\install-service.ps1') -ServiceName $ServiceName -NssmPath (Join-Path $extractDir 'nssm\nssm.exe')
+& powershell -ExecutionPolicy Bypass -File (Join-Path $extractDir 'scripts\windows\install-service.ps1') -ServiceName $ServiceName -NssmPath (Join-Path $extractDir 'nssm\nssm.exe')
+

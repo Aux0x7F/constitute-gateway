@@ -79,6 +79,8 @@ pub struct SwarmDeviceRecord {
     pub role: String,
     #[serde(default)]
     pub relays: Vec<String>,
+    #[serde(default = "default_service_version")]
+    pub service_version: String,
 }
 
 impl SwarmDeviceRecord {
@@ -98,6 +100,7 @@ impl SwarmDeviceRecord {
             expires_at: now + RECORD_TTL_MS,
             role: role.to_string(),
             relays,
+            service_version: service_version(),
         }
     }
 
@@ -117,6 +120,8 @@ struct ZonePresencePayload {
     role: String,
     #[serde(default)]
     relays: Vec<String>,
+    #[serde(default = "default_service_version")]
+    service_version: String,
     #[serde(default)]
     #[allow(dead_code)]
     metrics: Option<GatewayMetrics>,
@@ -216,6 +221,7 @@ impl DiscoveryClient {
             swarm: swarm_endpoint,
             role: self.device_record.role.clone(),
             relays: self.device_record.relays.clone(),
+            service_version: self.device_record.service_version.clone(),
             metrics: Some(self.metrics_rx.borrow().clone()),
             ts: util::now_unix_seconds() * 1000,
             ttl: 120,
@@ -251,4 +257,12 @@ pub fn default_record_kind() -> u32 {
 
 pub fn default_record_tag() -> String {
     DEFAULT_RECORD_TAG.to_string()
+}
+
+fn default_service_version() -> String {
+    service_version()
+}
+
+pub fn service_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
 }

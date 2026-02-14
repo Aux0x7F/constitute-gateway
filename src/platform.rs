@@ -9,7 +9,7 @@ compile_error!("features platform-linux and platform-windows are mutually exclus
 
 #[cfg(feature = "platform-linux")]
 pub fn init() {
-    tracing::info!("platform init: linux (ubuntu core)");
+    tracing::info!("platform init: linux (generic/fcos)");
 }
 
 #[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
@@ -24,7 +24,7 @@ pub fn init() {
 
 #[cfg(feature = "platform-linux")]
 pub fn default_data_dir() -> String {
-    "/var/snap/constitute-gateway/common/data".to_string()
+    "/var/lib/constitute-gateway/data".to_string()
 }
 
 #[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
@@ -41,7 +41,7 @@ pub fn default_data_dir() -> String {
 
 #[cfg(feature = "platform-linux")]
 pub fn default_config_path() -> PathBuf {
-    "/var/snap/constitute-gateway/common/config.json".into()
+    "/etc/constitute-gateway/config.json".into()
 }
 
 #[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]

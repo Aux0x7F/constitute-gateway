@@ -1,177 +1,148 @@
 # Constitute Gateway Architecture
 
-This document captures the current architecture, alignment with the web repo, and the roadmap for the native gateway.
+This document captures the gateway architecture, convergence requirements with the web repo, and the current roadmap.
 
 ## Purpose
-The gateway is a native, minimal relay node that enables browser peers to discover and bridge into the swarm. It is a dependency for the web experience, not a parallel product. All protocol decisions here must converge with the web Constitute standard.
+The gateway is a native dependency that enables browser clients to bootstrap discovery, bridge into swarm transport, and consume DHT-backed primitives. It is not a parallel product surface.
 
 ## Alignment With Web Repo
-**Authoritative reference**: `https://github.com/Aux0x7F/constitute` (web repo).
+Authoritative reference: `https://github.com/Aux0x7F/constitute`.
 
-The gateway **uses the same identity model and event schemas** as the web stack:
-- **Identity = Nostr device keypair** (same as `identity/sw/nostr.js`).
-- **Signed NIP-01 events**.
-- **Swarm discovery records** (`kind=30078`, tag `t=swarm_discovery`, tag `type=device`).
-- **Zone presence** in app channel (`kind=1`, tag `t=constitute`, tag `z=<zone>`), payload type `zone_presence`.
+Required convergence points:
+- Identity model: Nostr device keypair
+- Signed NIP-01 events
+- Discovery record schema (`kind=30078`, `t=swarm_discovery`, `type=device`)
+- Zone presence envelope (`kind=1`, `t=constitute`, `z=<zone>`, `type=zone_presence`)
 
 ## Core Responsibilities
-1. **Discovery bootstrapping** via Nostr relays.
-2. **Swarm peer presence** via zone presence events.
-3. **Local gateway relay** for browser peers (Nostr-compatible; WS/WSS).
-4. **Swarm record store** for identity/device/dht records (DHT seed).
-5. **UDP handshake + peer table** for native/native mesh (in progress).
-5. **STUN-based external endpoint discovery** for swarm advertisement (in progress).
+1. Discovery bootstrap via Nostr relays
+2. Zone-scoped presence and peer discovery
+3. Local gateway relay for browser peers (WS/WSS)
+4. Swarm record storage for identity/device/DHT records
+5. UDP handshake + request forwarding across native peers
+6. External endpoint publication for swarm advertisement
 
-## Identity and Keys
-- On first run, the gateway generates a **Nostr keypair** and persists it.
-- The **public key is the gateway identity**.
-- All discovery events are **signed**.
-- The private key is stored locally and never exported by default.
+## Identity and Key Management
+- On first run, gateway generates a Nostr keypair and persists it.
+- Public key is gateway identity (`devicePk`).
+- Discovery and signaling events are signed.
+- Private key remains local by default.
 
-## Key Storage
-Keys and sensitive state are stored in an encrypted keystore under `data_dir`.
+Key storage:
+- Sensitive values are stored in encrypted keystore state under `data_dir`.
+- Source order:
+  1. OS keyring
+  2. `CONSTITUTE_GATEWAY_PASSPHRASE`
+  3. Local fallback key file (`keystore.key`)
 
-Sensitive fields stored in the keystore:
-- `nostr_pubkey`, `nostr_sk_hex`
-- `identity_id`, `device_label`
-- `zones`
-
-Key source order:
-1. OS keyring (preferred)
-2. Passphrase from env: `CONSTITUTE_GATEWAY_PASSPHRASE`
-3. Local fallback key file (`keystore.key`)
-
-To disable keyring:
-```
-CONSTITUTE_GATEWAY_NO_KEYRING=1
-```
-
-## Event Schemas (Current)
+## Discovery and Presence Contracts
 ### Swarm Discovery Record
 - `kind`: `30078`
-- `tags`: `['t','swarm_discovery']`, `['type','device']`
-- `content` (JSON):
-  - `devicePk`
-  - `identityId` (optional for now)
-  - `deviceLabel` (optional)
-  - `updatedAt`
-  - `expiresAt`
-  - `role` (gateway)
-  - `relays` (gateway relay endpoints)
-  - `metrics` (clients, cpuPct, memPct, loadPct, memUsedMb, memTotalMb, ts)
+- Tags: `['t','swarm_discovery']`, `['type','device']`
+- Content fields include:
+  - `devicePk`, optional `identityId`, optional `deviceLabel`
+  - `updatedAt`, `expiresAt`
+  - `role` (`gateway`)
+  - `relays`
+  - `serviceVersion`
 
 ### Zone Presence
 - `kind`: `1`
-- `tags`: `['t','constitute']`, `['z','<zone_key>']`
-- `content` (JSON):
-  - `type: 'zone_presence'`
-  - `zone`
-  - `devicePk`
-  - `swarm` (UDP endpoint host:port when advertised; discovered via STUN)
-  - `role` (gateway)
-  - `relays` (gateway relay endpoints)
-  - `metrics` (clients, cpuPct, memPct, loadPct, memUsedMb, memTotalMb, ts)
-  - `ts`
-  - `ttl`
+- Tags: `['t','constitute']`, `['z','<zone_key>']`
+- Content fields include:
+  - `type: zone_presence`
+  - `zone`, `devicePk`
+  - `swarm` endpoint
+  - `role`, `relays`, `serviceVersion`, `metrics`
+  - `ts`, `ttl`
 
-## Zones
+## Zone and Overlay Direction
+- UDP gossip is zone-scoped.
+- Gateways may join multiple zones.
+- Records are stored per-zone and not auto-bridged across zones.
 
-## Zone-Scoped Gossip
-- UDP gossip is **zone-scoped**; records include a `zone` and are ignored outside that zone.
-- Gateways may join multiple zones; records are stored per-zone and never auto-bridged across zones.
+Future overlay model:
+- Communities can span zones via explicit routing/invites.
+- Coalitions group communities and can define shared interop channels.
+- Cross-zone routing remains opt-in to reduce metadata leakage.
 
-## Communities and Coalitions (Future Model)
-- **Communities** are overlay networks that can span zones via explicit routing invites.
-- **Coalitions** group multiple communities and can define shared interop channels.
-- Interop channels can be modeled as **shared rendezvous zones** with explicit membership.
-- Cross-zone routing is opt-in and permissioned to avoid discovery metadata leakage.
+## Update Distribution Direction
+Current model:
+- Gateways poll GitHub tagged releases (`releases/latest`).
+- Poll interval is operator-configured (`--timer-interval`) with development override (`--dev-poll`).
+- Egress policy is operator-managed (direct/proxy/tunnel).
 
-- Zone keys are generated with the **same algorithm as web**:
-  - `sha256(label|b64url(random(8)))` then `slice(0, 20)` (URL-safe base64)
-- Gateway creates a default zone if none are configured and persists the generated key.
-- Zone presence is broadcast periodically for each configured zone.
+Planned model:
+- Optional proxy/Tor egress helper flows.
+- Signed `update_available` announcements from web devices.
+- Optional no-clearnet mode where release payloads arrive via trusted network peers.
 
-## Configuration
-- `config.example.json` is a template.
-- `config.json` is generated at runtime and **gitignored**.
-- Plaintext config includes only operational settings (bind, relays).
-- Sensitive config is stored in the encrypted keystore.
+## Host Baseline and Hardening
+Preferred host baseline:
+- Fedora CoreOS with first-boot provisioning (Ignition/Butane)
 
-## Host Hardening (Ops)
-- Snap confinement provides AppArmor + seccomp by default.
-- Host firewalling and SSH hardening remain outside the snap.
-- Recommended: lock inbound ports to the gateway relay + swarm UDP only.
-- Fail2ban on classic Ubuntu/VPS; Ubuntu Core uses snap refresh for updates.
+Operational hardening:
+- Bounded firewall rules for explicit ports only
+- Systemd service limits and restart policy
+- Non-root runtime where feasible
+- Minimal logging by default
 
-## Threat Model / Privacy Assumptions
-We assume a high-surveillance ("big brother") environment. Discovery is public by design, and relay metadata can be observed or correlated.
+## Threat Model
+Assume high-surveillance environments:
+- Discovery metadata is observable.
+- Transport endpoints are correlatable without operator OPSEC.
 
 Operational guidance:
-- Community operators should use VPN/tunnels for gateways when their risk profile or zones require anonymity.
-- STUN will reflect the active egress path (VPN public IP if full-tunnel; ISP IP if not).
-- Prefer WSS when feasible to reduce passive metadata exposure.
-
-## Application-Layer Security
-Identity-level and above abstractions (communities, chat, app data) must be end-to-end encrypted.
-Transport (relay/WS/UDP) is a delivery substrate, not a trust boundary.
+- Use VPN/tunnel controls based on risk profile.
+- Treat transport as delivery substrate, not confidentiality boundary.
+- Enforce encryption at identity/application layers.
 
 ## Security Posture
 Current guarantees:
-- Signed discovery events.
-- Keys are encrypted at rest.
-- Minimal data stored locally.
-- Relay rebroadcast is deduped by event id.
-- Relay validates NIP-01 signatures + replay window (created_at + payload ts/ttl).
-- Swarm record store validates + gossips identity/device records over UDP.
+- Signed discovery events
+- Encrypted key material at rest
+- Replay mitigation in relay paths
+- DHT/record validation before acceptance
 
 Planned hardening:
-- Config integrity checks.
-- Optional key encryption at rest (keyring + KDF fallback).
+- Config integrity validation and migration guards
+- Signed release metadata verification
+- Stronger host config update verification path
 
 ## Roadmap
-### Phase 0: Bootstrap Parity (in progress)
+### Phase 0: Bootstrap Parity
 - [x] Nostr keypair generation and signed events
-- [x] Zone presence and discovery record alignment
-- [x] Local gateway relay (Nostr-compatible)
-- [ ] WebRTC signaling relay (offer/answer/ICE pass-through)
-- [x] Basic metrics/health reporting
+- [x] Zone presence and discovery schema alignment
+- [x] Local gateway relay
+- [x] DHT put/get bridge for app-channel + UDP lookup
+- [x] Basic metrics publication
 
 ### Phase 1: Swarm Transport
-- [ ] Stable mesh transport (initial WebRTC + relay)
-- [ ] Relay fallback strategy (nostr -> gateway -> direct)
-- [ ] NAT traversal strategy, TURN/Gateway relay roles
+- [ ] Stable mesh transport under difficult NAT topologies
+- [ ] Relay fallback strategy (`nostr -> gateway -> direct`)
+- [ ] TURN/gateway role boundaries
 
-### Phase 2: Gateway Service Hardening
-- [ ] Structured logging + minimal telemetry
-- [ ] Secure config management
-- [ ] Service packaging (Windows service + Ubuntu Core snap)
+### Phase 2: Host and Service Hardening
+- [x] FCOS first-boot bootstrap scaffold
+- [x] Operator-managed update timer path
+- [ ] Signature-verified release payload enforcement
+- [ ] Non-root runtime hardening profile completion
 
-### Phase 3: Convergence with Web Swarm
-- [~] Full compatibility with web swarm DHT resolution (gateway-side put/get + UDP lookup delivered; web convergence pending)
-- [ ] Shared identity record resolution
-- [ ] Zone membership sync + presence durability
+### Phase 3: Web Convergence
+- [~] DHT contract convergence (gateway side implemented, web side pending)
+- [ ] Shared identity/device resolution behavior parity
+- [ ] Zone membership durability and sync behavior parity
 
 ### Future Milestone: Managed Gateways
-- [ ] Identity-owned gateway fleet (configuration + health via web UI)
-- [ ] Client-consumable health/metrics for relay selection + balancing
-
-## Non-Goals
-- Full messaging or application data transport
-- Centralized account systems
-- Heavy orchestration or control panels
-
-## Open Questions
-- Long-term swarm transport layer (QUIC, RTC, or hybrid)
-- Relay trust model and rate limiting
-- Zone membership ACLs vs discovery openness
-
-
-
+- [ ] Identity-owned gateway fleet management in web surface
+- [ ] Signed update broadcasts from web devices
+- [ ] Optional no-clearnet gateway update mode
 
 ## Documentation Surface
-- Operator and contributor entrypoint: `README.md`
-- Design intent and roadmap: `ARCHITECTURE.md`
-- Protocol details: `docs/PROTOCOL.md`
-- Operational guidance: `docs/OPERATIONS.md`
-- Development workflow: `docs/DEVELOPMENT.md`
-- Generated Rust API docs: GitHub Pages via `.github/workflows/docs.yml`
+- `README.md`
+- `docs/PROTOCOL.md`
+- `docs/OPERATIONS.md`
+- `docs/DEVELOPMENT.md`
+- `docs/FCOS.md`
+- `infra/fcos/README.md`
+

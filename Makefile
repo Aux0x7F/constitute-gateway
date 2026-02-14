@@ -1,9 +1,8 @@
-.PHONY: snap snap-ci
+.PHONY: linux linux-ci
 
-SNAP_PROJECT_DIR := snap
+linux:
+	cargo build --release --features platform-linux
+	bash scripts/linux/package.sh
 
-snap:
-	snapcraft --use-lxd --project-dir $(SNAP_PROJECT_DIR)
+linux-ci: linux
 
-snap-ci:
-	snapcraft --destructive-mode --project-dir $(SNAP_PROJECT_DIR)

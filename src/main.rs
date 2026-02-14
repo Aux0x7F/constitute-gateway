@@ -141,6 +141,9 @@ struct ZonePresencePayload {
     swarm: String,
     #[serde(default)]
     #[allow(dead_code)]
+    service_version: String,
+    #[serde(default)]
+    #[allow(dead_code)]
     metrics: Option<discovery::GatewayMetrics>,
 }
 
@@ -382,7 +385,7 @@ async fn main() -> Result<()> {
         "stun/turn config"
     );
     info!(relays = advertise_relays.len(), "advertised relays");
-    info!("build target is intended for Ubuntu Core (linux)");
+    info!("build target is intended for Linux hosts (FCOS/minimal/server)");
 
     platform::init();
 
@@ -2285,6 +2288,7 @@ fn read_zone_seed_file(data_dir: &str) -> Option<String> {
 }
 
 fn read_zone_seed_snapctl() -> Option<String> {
+    // Legacy compatibility fallback for older snap-based deployments.
     if std::env::var("SNAP").is_err() && std::env::var("SNAP_NAME").is_err() {
         return None;
     }

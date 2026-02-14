@@ -49,6 +49,7 @@ fn discovery_envelope_shape() {
     let content = ev["content"].as_str().expect("content");
     let payload: Value = serde_json::from_str(content).expect("payload json");
     assert_eq!(payload["devicePk"], "pk-test");
+    assert_eq!(payload["serviceVersion"], env!("CARGO_PKG_VERSION"));
 }
 
 #[test]
@@ -94,6 +95,7 @@ fn zone_presence_envelope_shape() {
     assert_eq!(payload["type"], "zone_presence");
     assert_eq!(payload["zone"], "zonekey");
     assert_eq!(payload["devicePk"], "pubkey");
+    assert_eq!(payload["serviceVersion"], env!("CARGO_PKG_VERSION"));
     assert!(payload.get("metrics").is_some());
     assert!(payload["metrics"]["clients"].is_number());
 }

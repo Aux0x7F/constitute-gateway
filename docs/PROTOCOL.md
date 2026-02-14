@@ -1,24 +1,28 @@
 # Protocol Notes
 
+## Compatibility Rule
+Protocol changes in this repo must remain convergent with the web repo contracts (`constitute`).
+
 ## Discovery Plane
 
 ### Device Discovery Record
 - Nostr `kind`: `30078`
-- Tags:
+- Required tags:
   - `['t', 'swarm_discovery']`
   - `['type', 'device']`
 - Content fields:
   - `devicePk`
-  - `identityId`
-  - `deviceLabel`
+  - `identityId` (optional)
+  - `deviceLabel` (optional)
   - `updatedAt`
   - `expiresAt`
   - `role`
   - `relays`
+  - `serviceVersion`
 
 ### Zone Presence
 - Nostr `kind`: `1`
-- Tags:
+- Required tags:
   - `['t', 'constitute']`
   - `['z', '<zone_key>']`
 - Content fields:
@@ -28,59 +32,64 @@
   - `swarm`
   - `role`
   - `relays`
+  - `serviceVersion`
   - `metrics`
   - `ts`
   - `ttl`
 
-## App Channel Record Query
-Incoming event:
-- `type = swarm_record_request`
-- Optional:
-  - `requestId`
-  - `timeoutMs`
-  - `zone`
-  - `identityId`
-  - `devicePk`
-  - `want: [identity, device]`
+## App Channel Queries
+Incoming event type:
+- `swarm_record_request`
 
-Incoming DHT query event:
-- `type = swarm_dht_get`
-- Required:
-  - `scope` or `dhtScope`
-  - `key` or `dhtKey`
-- Optional:
-  - `zone`
-  - `requestId`
-  - `timeoutMs`
+Optional fields:
+- `requestId`
+- `timeoutMs`
+- `zone`
+- `identityId`
+- `devicePk`
+- `want: [identity, device]`
 
-Incoming DHT write event:
-- `type = swarm_dht_put`
-- Required:
-  - `scope` or `dhtScope`
-  - `key` or `dhtKey`
-  - `value`
-- Optional:
-  - `zone`
-  - `updatedAt`
-  - `expiresAt`
-  - `requestId`
+## DHT Events
+### Read
+Incoming type:
+- `swarm_dht_get`
 
-Outgoing events:
+Required fields:
+- `scope` or `dhtScope`
+- `key` or `dhtKey`
+
+Optional fields:
+- `zone`
+- `requestId`
+- `timeoutMs`
+
+### Write
+Incoming type:
+- `swarm_dht_put`
+
+Required fields:
+- `scope` or `dhtScope`
+- `key` or `dhtKey`
+- `value`
+
+Optional fields:
+- `zone`
+- `updatedAt`
+- `expiresAt`
+- `requestId`
+
+## Outgoing Gateway Events
 - `swarm_identity_record`
 - `swarm_device_record`
 - `swarm_dht_record`
-- `swarm_record_response` with `status`:
+- `swarm_record_response` with status:
   - `pending`
   - `complete`
   - `timeout`
 
-## UDP Gateway Transport
-- Zone-scoped record gossip
-- Targeted record request by `identityId`, `devicePk`, or (`dhtScope`, `dhtKey`)
+## UDP Transport Expectations
+- Zone-scoped gossip/propagation
+- Targeted request by `identityId`, `devicePk`, or (`dhtScope`, `dhtKey`)
 - Fanout bounded by `udp_request_fanout`
 - Forwarding bounded by `udp_request_max_hops`
-- Message version is validated (`UDP_PROTOCOL_VERSION`)
-
-## Compatibility Rule
-Any protocol change in this repo must remain convergent with the web repo protocol contracts.
-
+- Message version validated via `UDP_PROTOCOL_VERSION`

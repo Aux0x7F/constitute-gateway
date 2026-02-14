@@ -18,8 +18,8 @@ Defaults:
   - Does not enable/disable services or overwrite existing configs.
 
 Examples:
-  ./scripts/harden-host.sh
-  ./scripts/harden-host.sh --apply --udp 4040 --ws 7447 --wss 7448
+  ./scripts/linux/harden-host.sh
+  ./scripts/linux/harden-host.sh --apply --udp 4040 --ws 7447 --wss 7448
 EOF
 }
 
@@ -97,3 +97,4 @@ else
 fi
 
 log "done"
+

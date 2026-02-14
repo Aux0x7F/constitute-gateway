@@ -1,26 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICE="snap.constitute-gateway.gateway.service"
+SERVICE="${SERVICE:-constitute-gateway.service}"
 CPU_QUOTA="85%"
 RESTART=0
 
 usage() {
   cat <<'EOF'
-Usage: install-systemd-override.sh [--restart]
+Usage: install-systemd-override.sh [--service <unit>] [--restart]
 
-Installs a systemd drop-in for the snap service with conservative limits.
+Installs a systemd drop-in with conservative limits.
 - CPUQuota=85%
 
-Requires root. Works on classic Ubuntu/VPS with systemd.
+Requires root. Works on Linux hosts with systemd.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --restart) RESTART=1; shift ;;
-    -h|--help) usage; exit 0 ;;
-    *) echo "Unknown argument: $1"; usage; exit 1 ;;
+    --service)
+      SERVICE="${2:?missing value for --service}"
+      shift 2
+      ;;
+    --restart)
+      RESTART=1
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage
+      exit 1
+      ;;
   esac
 done
 

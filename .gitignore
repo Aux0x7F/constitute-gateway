@@ -1,17 +1,23 @@
+# Build outputs
 /target
 /dist
-/nssm
-/.nssm-tmp
 *.zip
+*.tar.gz
 *.snap
 SHA256SUMS
-config.json
+
+# Tool artifacts
+/nssm
+/.nssm-tmp
 **/*.rs.bk
 .DS_Store
 
+# Runtime state and secrets
+config.json
 keystore.json
 keystore.key
-
-
 zone.seed
 
+# Generated FCOS artifacts
+/infra/fcos/generated/*
+!/infra/fcos/generated/.gitkeep

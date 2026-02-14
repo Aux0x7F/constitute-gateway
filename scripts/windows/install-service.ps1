@@ -5,7 +5,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$repo = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $bin = Join-Path $repo 'target\release\constitute-gateway.exe'
 $config = Join-Path $repo 'config.json'
 $configExample = Join-Path $repo 'config.example.json'
@@ -59,7 +59,7 @@ if (-not (Test-Path $NssmPath)) {
 
 if (-not (Test-Path $bin)) {
     Write-Host "Binary not found; building release..."
-    if (-not (Build-Release "")) {
+    if (-not (Build-Release '')) {
         Write-Host "Release build failed. This is commonly caused by Windows exploit protection flagging Rust build scripts (proc-macro2)."
         Write-Host "If you see T1059 detections, temporarily disable exploit protection for rustc/cargo or allow-list the toolchain paths."
         Write-Host "Retrying with short target dir..."
