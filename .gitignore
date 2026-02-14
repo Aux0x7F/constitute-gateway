@@ -8,6 +8,8 @@ SHA256SUMS
 
 # Tool artifacts
 /nssm
+/nssm-ci
+/nssm-ci2
 /.nssm-tmp
 **/*.rs.bk
 .DS_Store

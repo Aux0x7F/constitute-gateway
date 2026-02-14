@@ -32,6 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scr
 
 ### Windows release install/update
 - Script path: `scripts/windows/install-latest.ps1`
+- Default bundle path: `%ProgramData%\Constitute\Gateway\bundle`
 
 Release source model:
 - Hosts consume `releases/latest` assets.
