@@ -5,24 +5,30 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
-  snap:
+  linux:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install snapcraft
-        run: sudo snap install snapcraft --classic
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Build snap
-        run: make snap-ci
+      - name: Build (Linux)
+        run: cargo build --release --features platform-linux
 
-      - name: Upload snap artifact
+      - name: Package Linux artifact
+        run: bash scripts/linux/package.sh
+
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: constitute-gateway-snap
-          path: "*.snap"
+          name: constitute-gateway-linux
+          path: constitute-gateway-linux-amd64.tar.gz
 
   windows:
     runs-on: windows-latest
@@ -39,9 +45,27 @@ jobs:
       - name: Download NSSM
         shell: pwsh
         run: |
-          $url = 'https://nssm.cc/release/nssm-2.24.zip'
-          Invoke-WebRequest -Uri $url -OutFile nssm.zip
-          Expand-Archive nssm.zip -DestinationPath nssm
+          $urls = @(
+            'https://nssm.cc/release/nssm-2.24.zip',
+            'https://www.nssm.cc/release/nssm-2.24.zip',
+            'https://github.com/kohsuke/nssm/releases/download/v2.24/nssm-2.24.zip'
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile nssm.zip
+                $downloaded = $true
+              } catch {
+                Start-Sleep -Seconds (2 * $attempt)
+              }
+            }
+            if ($downloaded) { break }
+          }
+          if (-not $downloaded) {
+            throw 'Failed to download NSSM from all configured mirrors'
+          }
+          Expand-Archive nssm.zip -DestinationPath nssm -Force
 
       - name: Package ZIP
         shell: pwsh
@@ -63,7 +87,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [snap, windows]
+    needs: [linux, windows]
     steps:
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -74,12 +98,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p out
-          snap_file=$(find dist -type f -name "*.snap" | head -n 1)
-          if [ -z "$snap_file" ]; then
-            echo "snap file not found" >&2
+          linux_file=$(find dist -type f -name "constitute-gateway-linux-amd64.tar.gz" | head -n 1)
+          if [ -z "$linux_file" ]; then
+            echo "linux tarball not found" >&2
             exit 1
           fi
-          cp "$snap_file" out/constitute-gateway-linux-amd64.snap
+          cp "$linux_file" out/constitute-gateway-linux-amd64.tar.gz
           win_file=$(find dist -type f -name "constitute-gateway-windows.zip" | head -n 1)
           if [ -z "$win_file" ]; then
             echo "windows zip not found" >&2
@@ -97,3 +121,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: out/*
+

@@ -1,0 +1,34 @@
+variant: fcos
+version: 1.6.0
+
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - __SSH_PUBLIC_KEY__
+
+storage:
+  directories:
+    - path: /var/lib/constitute-gateway
+      mode: 0755
+
+systemd:
+  units:
+    - name: constitute-gateway-firstboot.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Constitute Gateway first-boot bootstrap
+        Wants=network-online.target
+        After=network-online.target
+        ConditionPathExists=!/var/lib/constitute-gateway/bootstrap.done
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/bash -lc 'curl -fsSL https://raw.githubusercontent.com/__REPO_OWNER__/__REPO_NAME__/main/scripts/fcos/firstboot-bootstrap.sh | /usr/bin/bash -s -- __BOOTSTRAP_FLAGS__'
+        ExecStartPost=/usr/bin/touch /var/lib/constitute-gateway/bootstrap.done
+        RemainAfterExit=yes
+
+        [Install]
+        WantedBy=multi-user.target
+

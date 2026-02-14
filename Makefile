@@ -1,7 +1,8 @@
-.PHONY: snap snap-ci
+.PHONY: linux linux-ci
 
-snap:
-	snapcraft --use-lxd
+linux:
+	cargo build --release --features platform-linux
+	bash scripts/linux/package.sh
 
-snap-ci:
-	snapcraft --destructive-mode
+linux-ci: linux
+
