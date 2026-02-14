@@ -1,3 +1,8 @@
+//! Local Nostr-compatible websocket relay for browser-side clients.
+//!
+//! The local relay validates incoming events, enforces replay/rate constraints, and
+//! republishes approved events to configured upstream relays.
+
 use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
 use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
@@ -49,6 +54,7 @@ pub struct LocalRelayHandle {
 }
 
 impl LocalRelayHandle {
+    // Local publish path uses the same validate/dedupe/cache pipeline as remote ingress.
     pub async fn publish_event(&self, ev: Value) {
         let _ = publish_event(
             ev,
@@ -65,6 +71,7 @@ impl LocalRelayHandle {
     }
 }
 
+// Starts WS/WSS listeners and returns a shared relay handle when at least one listener is active.
 pub async fn start_relays(
     ws_bind: Option<String>,
     wss_bind: Option<String>,
@@ -134,6 +141,7 @@ pub async fn start_relays(
     }))
 }
 
+// TLS material is loaded once at startup; runtime key rotation is out of scope for now.
 fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
     let cert_file = File::open(cert_path)?;
     let mut cert_reader = BufReader::new(cert_file);
@@ -456,6 +464,7 @@ impl Drop for ClientGuard {
     }
 }
 
+// Validation combines signature correctness with replay-window and payload ts/ttl checks.
 fn validate_event(ev: &Value, cfg: &ValidationConfig) -> bool {
     let event: nostr::NostrEvent = match serde_json::from_value(ev.clone()) {
         Ok(ev) => ev,
@@ -517,6 +526,7 @@ fn payload_time_ok(content: &str, cfg: &ValidationConfig) -> bool {
     true
 }
 
+// publish_event is the relay ingest choke point: validate -> dedupe -> cache -> broadcast.
 async fn publish_event(
     ev: Value,
     sender: &broadcast::Sender<Value>,
@@ -541,6 +551,7 @@ async fn publish_event(
     true
 }
 
+// Each client connection maintains subscription filters and enforces per-connection limits.
 async fn handle_client<S>(
     stream: S,
     addr: SocketAddr,

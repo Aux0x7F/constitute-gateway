@@ -1,3 +1,7 @@
+//! Outbound relay pool for publishing/consuming Nostr frames.
+//!
+//! Maintains relay connections and fanout broadcast behavior for gateway events.
+
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};

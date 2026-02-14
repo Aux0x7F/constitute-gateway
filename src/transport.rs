@@ -1,3 +1,8 @@
+//! UDP transport primitives for gateway-to-gateway signaling.
+//!
+//! Includes peer handshake, zone-scoped record gossip, targeted record requests,
+//! and bounded request forwarding (fanout + max hops).
+
 use crate::nostr::NostrEvent;
 use anyhow::Result;
 use rand::RngCore;
@@ -119,6 +124,7 @@ pub struct UdpHandle {
 }
 
 impl UdpHandle {
+    // === Peer and record operations used by main orchestration ===
     #[allow(dead_code)]
     pub fn stop(self) {
         self.task.abort();
@@ -256,6 +262,7 @@ impl UdpHandle {
         }
     }
 
+    // Same-zone peer preference with deterministic scoring for targeted lookups.
     async fn select_peers(
         &self,
         zone: &str,
@@ -364,6 +371,7 @@ pub async fn start_udp_with_handle(bind: &str, cfg: UdpConfig) -> Result<UdpHand
     })
 }
 
+// Main UDP loop: outbound send path, periodic tasks, and inbound dispatch.
 async fn run_udp_loop(
     socket: Arc<UdpSocket>,
     cfg: UdpConfig,
@@ -503,6 +511,7 @@ pub async fn probe_stun(stun_servers: &[String], timeout: Duration) -> Result<Op
     }
 }
 
+// Resolve configured peers defensively; invalid entries are logged and skipped.
 pub async fn resolve_peers(raw: &[String]) -> Vec<SocketAddr> {
     let mut out = Vec::new();
     for peer in raw {
@@ -514,6 +523,7 @@ pub async fn resolve_peers(raw: &[String]) -> Vec<SocketAddr> {
     out
 }
 
+// Handles only version-compatible UDP messages and applies zone/rate checks.
 async fn handle_message(
     socket: &UdpSocket,
     table: &Arc<Mutex<HashMap<SocketAddr, PeerInfo>>>,

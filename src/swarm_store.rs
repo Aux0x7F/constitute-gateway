@@ -1,3 +1,8 @@
+//! In-memory validated store for swarm discovery records.
+//!
+//! Identity and device records are validated and indexed by zone to support
+//! targeted lookup and zone-scoped replication.
+
 use crate::nostr;
 use serde_json::Value;
 use std::collections::HashMap;

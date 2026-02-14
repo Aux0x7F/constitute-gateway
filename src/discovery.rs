@@ -1,3 +1,8 @@
+//! Discovery schemas and publication helpers for gateway presence and device records.
+//!
+//! This module builds signed Nostr envelopes used for bootstrap discovery and
+//! zone-scoped gateway presence signaling.
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;

@@ -1,3 +1,8 @@
+//! Encrypted key and sensitive state storage.
+//!
+//! Uses OS keyring when available and supports fallback key material under explicit
+//! runtime constraints.
+
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
 use chacha20poly1305::aead::{Aead, KeyInit};

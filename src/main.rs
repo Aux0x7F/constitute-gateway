@@ -246,6 +246,7 @@ fn normalize_zone_name(name: &str) -> String {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // === CLI and logging bootstrap ===
     let args = Args::parse();
     if std::env::var("RUST_LOG").is_err() {
         let level = util::normalize_log_level(&args.log_level)
@@ -257,6 +258,7 @@ async fn main() -> Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    // === Config and secure state bootstrap ===
     let config_path = args.config.unwrap_or_else(platform::default_config_path);
     let mut cfg = load_config(&config_path).unwrap_or_default();
 
@@ -299,6 +301,7 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Seed material is used only to initialize missing secure state; persisted secrets stay in keystore.
     let seed = keystore::SecureSeed {
         nostr_pubkey: cfg.nostr_pubkey.clone(),
         nostr_sk_hex: cfg.nostr_sk_hex.clone(),
@@ -342,6 +345,7 @@ async fn main() -> Result<()> {
         dirty = true;
     }
 
+    // Persist only non-sensitive operational config; keystore owns secret material.
     if dirty {
         // Do not persist secure fields into config.json for safety.
         cfg.nostr_sk_hex.clear();
@@ -451,6 +455,7 @@ async fn main() -> Result<()> {
             let _ = store.lock().await.put_record_all(&zones, &ev);
         }
     }
+    // === Network services: relay, discovery publisher, UDP transport ===
     let relay_pool =
         relay::RelayPool::new(cfg.nostr_relays.clone(), relay_req, Some(inbound_tx)).await;
     let discovery_client = discovery::DiscoveryClient::new(
@@ -606,6 +611,7 @@ async fn main() -> Result<()> {
         }
     });
 
+    // === Inbound processing context shared by nostr/local relay/UDP paths ===
     let inbound_ctx = InboundContext {
         self_pk: cfg.nostr_pubkey.clone(),
         self_sk: cfg.nostr_sk_hex.clone(),
@@ -913,6 +919,7 @@ async fn publish_record_app_event_with_request(
     Ok(())
 }
 
+// Pending request state exists to bridge async record arrival with request/response UX.
 async fn match_pending_requests(
     pending: &Arc<Mutex<HashMap<String, PendingRequest>>>,
     relay_pool: &relay::RelayPool,
@@ -1313,12 +1320,15 @@ async fn seen_or_insert(
     false
 }
 
+// Core trust boundary for inbound events: signature validation, replay gating,
+// record indexing, and request lifecycle handling converge here.
 async fn process_inbound_event(
     ev: Value,
     raw_frame: Option<String>,
     source: InboundSource,
     ctx: InboundContext,
 ) {
+    // Drop replayed event ids before any expensive verification or fanout.
     if let Some(id) = event_id(&ev) {
         if seen_or_insert(&id, &ctx.seen, ctx.seen_ttl, ctx.seen_max).await {
             return;
@@ -1329,12 +1339,14 @@ async fn process_inbound_event(
         Ok(ev) => ev,
         Err(_) => return,
     };
+    // Reject unsigned/invalid events early; all downstream flows assume verified input.
     if !nostr::verify_event(&nostr_ev).unwrap_or(false) {
         return;
     }
 
     let frame = raw_frame.unwrap_or_else(|| nostr::frame_event(&nostr_ev));
 
+    // Relay fanout only for app/discovery-tagged events; preserve source separation.
     if is_allowed_event(&ev) {
         if matches!(source, InboundSource::Nostr) {
             if let Some(local) = ctx.local_relay.as_ref() {
@@ -1758,6 +1770,7 @@ fn remember_event(id: String, cache: &mut SeenCache, ttl: Duration, max: usize) 
     }
 }
 
+// Zone presence parsing intentionally ignores zones not joined locally.
 fn parse_zone_presence(ev: &Value, zones: &HashSet<String>, self_pk: &str) -> Option<String> {
     let kind = ev.get("kind")?.as_u64()?;
     if kind != 1 {

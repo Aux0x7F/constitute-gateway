@@ -167,3 +167,11 @@ Planned hardening:
 
 
 
+
+## Documentation Surface
+- Operator and contributor entrypoint: `README.md`
+- Design intent and roadmap: `ARCHITECTURE.md`
+- Protocol details: `docs/PROTOCOL.md`
+- Operational guidance: `docs/OPERATIONS.md`
+- Development workflow: `docs/DEVELOPMENT.md`
+- Generated Rust API docs: GitHub Pages via `.github/workflows/docs.yml`

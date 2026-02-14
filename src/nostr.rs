@@ -1,3 +1,7 @@
+//! Minimal Nostr event/signing utilities used by gateway components.
+//!
+//! Provides event construction, signing, verification, and websocket frame helpers.
+
 use anyhow::{anyhow, Result};
 use secp256k1::schnorr::Signature;
 use secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey};

@@ -63,6 +63,8 @@ Update docs for any of the following:
 Primary docs:
 - `README.md` for operator/developer quickstart
 - `ARCHITECTURE.md` for design and roadmap
+- `docs/` for protocol/operations/development references
+- Rust module docs (`//!`) for code-level navigation
 
 ## Security Reporting
 Do not open a public issue for active exploit details.

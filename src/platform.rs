@@ -1,3 +1,7 @@
+//! Platform-specific defaults and initialization hooks.
+//!
+//! Encapsulates runtime path conventions and platform feature selection.
+
 use std::path::PathBuf;
 
 #[cfg(all(feature = "platform-linux", feature = "platform-windows"))]
