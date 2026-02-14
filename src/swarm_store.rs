@@ -15,6 +15,7 @@ const MAX_SKEW_SEC: u64 = 10 * 60;
 pub enum RecordType {
     Identity,
     Device,
+    Dht,
 }
 
 impl RecordType {
@@ -22,6 +23,7 @@ impl RecordType {
         match self {
             RecordType::Identity => "identity",
             RecordType::Device => "device",
+            RecordType::Dht => "dht",
         }
     }
 }
@@ -37,6 +39,7 @@ struct StoredRecord {
 pub struct SwarmStore {
     identities: HashMap<String, StoredRecord>,
     devices: HashMap<String, StoredRecord>,
+    dht: HashMap<String, StoredRecord>,
 }
 
 impl SwarmStore {
@@ -74,6 +77,19 @@ impl SwarmStore {
                     },
                 );
             }
+            RecordType::Dht => {
+                if !should_replace(&self.dht, &info) {
+                    return None;
+                }
+                self.dht.insert(
+                    info.key.clone(),
+                    StoredRecord {
+                        event: ev.clone(),
+                        updated_at: info.updated_at,
+                        expires_at: info.expires_at,
+                    },
+                );
+            }
         }
         Some(record_type)
     }
@@ -92,6 +108,16 @@ impl SwarmStore {
 
     pub fn get_device_event(&self, pk: &str) -> Option<nostr::NostrEvent> {
         self.devices.get(pk).map(|r| r.event.clone())
+    }
+
+    pub fn list_dht_events(&self) -> Vec<nostr::NostrEvent> {
+        self.dht.values().map(|r| r.event.clone()).collect()
+    }
+
+    pub fn get_dht_event(&self, scope: &str, key: &str) -> Option<nostr::NostrEvent> {
+        self.dht
+            .get(&dht_record_key(scope, key))
+            .map(|r| r.event.clone())
     }
 }
 
@@ -139,6 +165,7 @@ fn record_type(ev: &nostr::NostrEvent) -> Option<RecordType> {
         return match t[1].as_str() {
             "identity" => Some(RecordType::Identity),
             "device" => Some(RecordType::Device),
+            "dht" => Some(RecordType::Dht),
             _ => None,
         };
     }
@@ -211,7 +238,42 @@ fn validate_record(ev: &nostr::NostrEvent, expected: RecordType) -> Option<Recor
                 event_id: ev.id.clone(),
             })
         }
+        RecordType::Dht => {
+            let scope = payload
+                .get("scope")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let key = payload
+                .get("key")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if scope.is_empty() || key.is_empty() {
+                return None;
+            }
+            if payload.get("value").is_none() {
+                return None;
+            }
+            let author_pk = payload
+                .get("authorPk")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !author_pk.is_empty() && author_pk != ev.pubkey {
+                return None;
+            }
+            Some(RecordInfo {
+                key: dht_record_key(scope, key),
+                updated_at,
+                expires_at,
+                event_id: ev.id.clone(),
+            })
+        }
     }
+}
+
+fn dht_record_key(scope: &str, key: &str) -> String {
+    format!("{}:{}", scope.trim(), key.trim())
 }
 
 fn clock_ok(created_at: u64) -> bool {
@@ -291,6 +353,25 @@ mod tests {
         let stored = store.put_record(&ev);
         assert!(stored.is_none());
     }
+
+    #[test]
+    fn store_accepts_dht_record() {
+        let (pk, sk) = nostr::generate_keypair();
+        let content = json!({
+            "scope": "zone_members",
+            "key": "peer-1",
+            "value": { "devicePk": pk, "status": "up" },
+            "authorPk": pk,
+            "updatedAt": super::now_ms(),
+            "expiresAt": super::now_ms() + 60000,
+        });
+        let ev = make_event("dht", content, &pk, &sk);
+        let mut store = SwarmStore::new();
+        let stored = store.put_record(&ev);
+        assert_eq!(stored, Some(RecordType::Dht));
+        assert_eq!(store.list_dht_events().len(), 1);
+        assert!(store.get_dht_event("zone_members", "peer-1").is_some());
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -340,12 +421,30 @@ impl SwarmStoreMap {
             .unwrap_or_default()
     }
 
+    pub fn list_dht_events_zone(&self, zone: &str) -> Vec<nostr::NostrEvent> {
+        self.stores
+            .get(zone)
+            .map(|s| s.list_dht_events())
+            .unwrap_or_default()
+    }
+
     pub fn get_identity_event_zone(&self, zone: &str, id: &str) -> Option<nostr::NostrEvent> {
         self.stores.get(zone).and_then(|s| s.get_identity_event(id))
     }
 
     pub fn get_device_event_zone(&self, zone: &str, pk: &str) -> Option<nostr::NostrEvent> {
         self.stores.get(zone).and_then(|s| s.get_device_event(pk))
+    }
+
+    pub fn get_dht_event_zone(
+        &self,
+        zone: &str,
+        scope: &str,
+        key: &str,
+    ) -> Option<nostr::NostrEvent> {
+        self.stores
+            .get(zone)
+            .and_then(|s| s.get_dht_event(scope, key))
     }
 
     pub fn get_identity_event_any(&self, id: &str) -> Option<nostr::NostrEvent> {
@@ -365,6 +464,16 @@ impl SwarmStoreMap {
         }
         None
     }
+
+    pub fn get_dht_event_any(&self, scope: &str, key: &str) -> Option<nostr::NostrEvent> {
+        for store in self.stores.values() {
+            if let Some(ev) = store.get_dht_event(scope, key) {
+                return Some(ev);
+            }
+        }
+        None
+    }
+
     pub fn list_identity_events_all(&self) -> Vec<nostr::NostrEvent> {
         let mut out = Vec::new();
         for store in self.stores.values() {

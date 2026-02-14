@@ -708,15 +708,19 @@ async fn main() -> Result<()> {
                     types,
                     identity_id,
                     device_pk,
+                    dht_scope,
+                    dht_key,
                     hops,
                     from,
                 } => {
                     let want_identity = types.is_empty() || types.iter().any(|t| t == "identity");
                     let want_device = types.is_empty() || types.iter().any(|t| t == "device");
+                    let want_dht = types.iter().any(|t| t == "dht");
                     let guard = store_for_udp.lock().await;
 
                     let mut served_identity = false;
                     let mut served_device = false;
+                    let mut served_dht = false;
 
                     if let Some(id) = identity_id.as_ref() {
                         if want_identity {
@@ -746,8 +750,26 @@ async fn main() -> Result<()> {
                         }
                     }
 
+                    if want_dht {
+                        if let (Some(scope), Some(key)) = (dht_scope.as_ref(), dht_key.as_ref()) {
+                            if let Some(record) = guard.get_dht_event_zone(&zone, scope, key) {
+                                udp_handle_for_udp.send_record_to(from, &zone, "dht", record);
+                                served_dht = true;
+                            }
+                        } else {
+                            for record in guard.list_dht_events_zone(&zone) {
+                                udp_handle_for_udp.send_record_to(from, &zone, "dht", record);
+                                served_dht = true;
+                            }
+                        }
+                    }
+
                     let need_forward = (want_identity && !served_identity && identity_id.is_some())
-                        || (want_device && !served_device && device_pk.is_some());
+                        || (want_device && !served_device && device_pk.is_some())
+                        || (want_dht
+                            && !served_dht
+                            && dht_scope.as_ref().map(|s| !s.is_empty()).unwrap_or(false)
+                            && dht_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false));
                     if need_forward {
                         let next_hops = hops.saturating_add(1);
                         udp_handle_for_udp
@@ -756,6 +778,8 @@ async fn main() -> Result<()> {
                                 types.clone(),
                                 identity_id.clone(),
                                 device_pk.clone(),
+                                dht_scope.clone(),
+                                dht_key.clone(),
                                 next_hops,
                                 Some(from),
                             )
@@ -857,6 +881,33 @@ fn record_device_pk(record: &nostr::NostrEvent) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+fn record_dht_scope_key(record: &nostr::NostrEvent) -> Option<(String, String)> {
+    let payload: Value = serde_json::from_str(&record.content).ok()?;
+    let scope = payload
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let key = payload
+        .get("key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if scope.is_empty() || key.is_empty() {
+        return None;
+    }
+    Some((scope.to_string(), key.to_string()))
+}
+
+fn payload_str(payload: &Value, key: &str) -> String {
+    payload
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string()
+}
+
 async fn publish_request_status(
     relay_pool: &relay::RelayPool,
     local_relay: &Option<local_relay::LocalRelayHandle>,
@@ -876,6 +927,9 @@ async fn publish_request_status(
     if req.want_device {
         want.push("device");
     }
+    if req.want_dht {
+        want.push("dht");
+    }
     let payload = serde_json::json!({
         "type": "swarm_record_response",
         "requestId": request_id,
@@ -883,6 +937,8 @@ async fn publish_request_status(
         "zone": req.zone,
         "identityId": req.identity_id,
         "devicePk": req.device_pk,
+        "dhtScope": req.dht_scope,
+        "dhtKey": req.dht_key,
         "want": want,
         "ts": util::now_unix_seconds() * 1000,
     });
@@ -932,6 +988,7 @@ async fn match_pending_requests(
 ) {
     let identity_id = record_identity_id(record);
     let device_pk = record_device_pk(record);
+    let dht_scope_key = record_dht_scope_key(record);
     let mut to_send: Vec<String> = Vec::new();
     let mut to_complete: Vec<(String, PendingRequest)> = Vec::new();
     let mut to_timeout: Vec<(String, PendingRequest)> = Vec::new();
@@ -987,6 +1044,21 @@ async fn match_pending_requests(
                         }
                     }
                 }
+                RecordType::Dht => {
+                    if req.want_dht && !req.sent_dht {
+                        let ok = match ((&req.dht_scope, &req.dht_key), &dht_scope_key) {
+                            ((Some(want_scope), Some(want_key)), Some((scope, key))) => {
+                                want_scope == scope && want_key == key
+                            }
+                            ((Some(_), Some(_)), None) => false,
+                            _ => true,
+                        };
+                        if ok {
+                            req.sent_dht = true;
+                            matched = true;
+                        }
+                    }
+                }
             }
 
             if matched {
@@ -995,7 +1067,8 @@ async fn match_pending_requests(
 
             let done_identity = !req.want_identity || req.sent_identity;
             let done_device = !req.want_device || req.sent_device;
-            if done_identity && done_device {
+            let done_dht = !req.want_dht || req.sent_dht;
+            if done_identity && done_device && done_dht {
                 if let Some(req) = guard.remove(&key) {
                     to_complete.push((key.clone(), req));
                 }
@@ -1044,9 +1117,13 @@ async fn match_pending_requests(
 }
 
 fn wants_type(payload: &Value, kind: &str) -> bool {
+    wants_type_default(payload, kind, true)
+}
+
+fn wants_type_default(payload: &Value, kind: &str, default_value: bool) -> bool {
     match payload.get("want").and_then(|v| v.as_array()) {
         Some(arr) => arr.iter().any(|v| v.as_str() == Some(kind)),
-        None => true,
+        None => default_value,
     }
 }
 
@@ -1076,6 +1153,10 @@ fn build_record_app_event(
         }),
         RecordType::Device => serde_json::json!({
             "type": "swarm_device_record",
+            "record": record,
+        }),
+        RecordType::Dht => serde_json::json!({
+            "type": "swarm_dht_record",
             "record": record,
         }),
     };
@@ -1123,6 +1204,38 @@ fn build_device_record_event(
         discovery::default_record_kind(),
         tags,
         record.to_json(),
+        util::now_unix_seconds(),
+    );
+    nostr::sign_event(&unsigned, sk_hex)
+}
+
+fn build_dht_record_event(
+    pubkey: &str,
+    sk_hex: &str,
+    scope: &str,
+    key: &str,
+    value: Value,
+    updated_at: Option<u64>,
+    expires_at: Option<u64>,
+) -> Result<nostr::NostrEvent> {
+    let now_ms = util::now_unix_seconds() * 1000;
+    let tags = vec![
+        vec!["t".to_string(), discovery::default_record_tag()],
+        vec!["type".to_string(), "dht".to_string()],
+    ];
+    let content = serde_json::json!({
+        "scope": scope,
+        "key": key,
+        "value": value,
+        "authorPk": pubkey,
+        "updatedAt": updated_at.unwrap_or(now_ms),
+        "expiresAt": expires_at.unwrap_or(now_ms + (60 * 60 * 1000)),
+    });
+    let unsigned = nostr::build_unsigned_event(
+        pubkey,
+        discovery::default_record_kind(),
+        tags,
+        content.to_string(),
         util::now_unix_seconds(),
     );
     nostr::sign_event(&unsigned, sk_hex)
@@ -1257,10 +1370,14 @@ struct PendingRequest {
     zone: Option<String>,
     identity_id: Option<String>,
     device_pk: Option<String>,
+    dht_scope: Option<String>,
+    dht_key: Option<String>,
     want_identity: bool,
     want_device: bool,
+    want_dht: bool,
     sent_identity: bool,
     sent_device: bool,
+    sent_dht: bool,
     expires_at: Instant,
     notified_pending: bool,
 }
@@ -1395,7 +1512,9 @@ async fn process_inbound_event(
 
     if let Some(payload) = parse_app_payload(&nostr_ev) {
         let kind = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
-        if (kind == "swarm_identity_record" || kind == "swarm_device_record")
+        if (kind == "swarm_identity_record"
+            || kind == "swarm_device_record"
+            || kind == "swarm_dht_record")
             && payload.get("record").is_some()
         {
             if let Ok(record_ev) =
@@ -1457,10 +1576,14 @@ async fn process_inbound_event(
                         } else {
                             Some(device_pk.to_string())
                         },
+                        dht_scope: None,
+                        dht_key: None,
                         want_identity,
                         want_device,
+                        want_dht: false,
                         sent_identity: false,
                         sent_device: false,
+                        sent_dht: false,
                         expires_at: Instant::now() + request_timeout(&payload),
                         notified_pending: false,
                     };
@@ -1641,10 +1764,14 @@ async fn process_inbound_event(
                         zone: zone.clone(),
                         identity_id: None,
                         device_pk: None,
+                        dht_scope: None,
+                        dht_key: None,
                         want_identity,
                         want_device,
+                        want_dht: false,
                         sent_identity: want_identity,
                         sent_device: want_device,
+                        sent_dht: false,
                         expires_at: Instant::now(),
                         notified_pending: false,
                     };
@@ -1718,6 +1845,234 @@ async fn process_inbound_event(
                         )
                         .await;
                     }
+                }
+            }
+        }
+
+        if kind == "swarm_dht_put" {
+            let zone = payload_zone(&payload);
+            let mut dht_scope = payload_str(&payload, "dhtScope");
+            if dht_scope.is_empty() {
+                dht_scope = payload_str(&payload, "scope");
+            }
+            let mut dht_key = payload_str(&payload, "dhtKey");
+            if dht_key.is_empty() {
+                dht_key = payload_str(&payload, "key");
+            }
+            if dht_scope.is_empty() || dht_key.is_empty() {
+                return;
+            }
+
+            let zones_to_write: Vec<String> = if let Some(z) = zone.as_ref() {
+                if ctx.zones.contains(z) {
+                    vec![z.clone()]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                ctx.zones.clone()
+            };
+            if zones_to_write.is_empty() {
+                return;
+            }
+
+            let value = payload.get("value").cloned().unwrap_or(Value::Null);
+            let updated_at = payload.get("updatedAt").and_then(|v| v.as_u64());
+            let expires_at = payload.get("expiresAt").and_then(|v| v.as_u64());
+            let request_id = parse_request_id(&payload);
+
+            if let Ok(record_ev) = build_dht_record_event(
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &dht_scope,
+                &dht_key,
+                value,
+                updated_at,
+                expires_at,
+            ) {
+                {
+                    let mut guard = ctx.store.lock().await;
+                    for z in &zones_to_write {
+                        let _ = guard.put_record_in_zone(z, &record_ev);
+                    }
+                }
+                ctx.relay_pool.broadcast(&nostr::frame_event(&record_ev));
+                if let Some(local) = ctx.local_relay.as_ref() {
+                    if let Ok(val) = serde_json::to_value(&record_ev) {
+                        local.publish_event(val).await;
+                    }
+                }
+
+                for z in &zones_to_write {
+                    ctx.udp_handle.broadcast_record(z, "dht", record_ev.clone());
+                }
+
+                let _ = publish_record_app_event_with_request(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    RecordType::Dht,
+                    &record_ev,
+                    request_id.as_deref(),
+                )
+                .await;
+
+                match_pending_requests(
+                    &ctx.pending,
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    RecordType::Dht,
+                    &record_ev,
+                    zone.as_deref(),
+                )
+                .await;
+
+                if let Some(req_id) = request_id.as_ref() {
+                    let req = PendingRequest {
+                        zone,
+                        identity_id: None,
+                        device_pk: None,
+                        dht_scope: Some(dht_scope),
+                        dht_key: Some(dht_key),
+                        want_identity: false,
+                        want_device: false,
+                        want_dht: true,
+                        sent_identity: false,
+                        sent_device: false,
+                        sent_dht: true,
+                        expires_at: Instant::now(),
+                        notified_pending: false,
+                    };
+                    let _ = publish_request_status(
+                        &ctx.relay_pool,
+                        &ctx.local_relay,
+                        &ctx.self_pk,
+                        &ctx.self_sk,
+                        req_id,
+                        "complete",
+                        &req,
+                    )
+                    .await;
+                }
+            }
+        }
+
+        if kind == "swarm_dht_get" {
+            let zone = payload_zone(&payload);
+            let mut dht_scope = payload_str(&payload, "dhtScope");
+            if dht_scope.is_empty() {
+                dht_scope = payload_str(&payload, "scope");
+            }
+            let mut dht_key = payload_str(&payload, "dhtKey");
+            if dht_key.is_empty() {
+                dht_key = payload_str(&payload, "key");
+            }
+            if dht_scope.is_empty() || dht_key.is_empty() {
+                return;
+            }
+            let request_id = parse_request_id(&payload);
+
+            let rec = {
+                let guard = ctx.store.lock().await;
+                if let Some(z) = zone.as_ref() {
+                    if ctx.zones.contains(z) {
+                        guard.get_dht_event_zone(z, &dht_scope, &dht_key)
+                    } else {
+                        None
+                    }
+                } else {
+                    guard.get_dht_event_any(&dht_scope, &dht_key)
+                }
+            };
+
+            if let Some(record) = rec {
+                let _ = publish_record_app_event_with_request(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    RecordType::Dht,
+                    &record,
+                    request_id.as_deref(),
+                )
+                .await;
+                if let Some(req_id) = request_id.as_ref() {
+                    let req = PendingRequest {
+                        zone,
+                        identity_id: None,
+                        device_pk: None,
+                        dht_scope: Some(dht_scope),
+                        dht_key: Some(dht_key),
+                        want_identity: false,
+                        want_device: false,
+                        want_dht: true,
+                        sent_identity: false,
+                        sent_device: false,
+                        sent_dht: true,
+                        expires_at: Instant::now(),
+                        notified_pending: false,
+                    };
+                    let _ = publish_request_status(
+                        &ctx.relay_pool,
+                        &ctx.local_relay,
+                        &ctx.self_pk,
+                        &ctx.self_sk,
+                        req_id,
+                        "complete",
+                        &req,
+                    )
+                    .await;
+                }
+            } else {
+                let zones_to_query: Vec<String> = if let Some(z) = zone.as_ref() {
+                    if ctx.zones.contains(z) {
+                        vec![z.clone()]
+                    } else {
+                        Vec::new()
+                    }
+                } else {
+                    ctx.zones.clone()
+                };
+
+                if let Some(req_id) = request_id.as_ref() {
+                    let req = PendingRequest {
+                        zone: zone.clone(),
+                        identity_id: None,
+                        device_pk: None,
+                        dht_scope: Some(dht_scope.clone()),
+                        dht_key: Some(dht_key.clone()),
+                        want_identity: false,
+                        want_device: false,
+                        want_dht: true,
+                        sent_identity: false,
+                        sent_device: false,
+                        sent_dht: false,
+                        expires_at: Instant::now() + request_timeout(&payload),
+                        notified_pending: true,
+                    };
+                    {
+                        let mut guard = ctx.pending.lock().await;
+                        guard.insert(req_id.clone(), req.clone());
+                    }
+                    let _ = publish_request_status(
+                        &ctx.relay_pool,
+                        &ctx.local_relay,
+                        &ctx.self_pk,
+                        &ctx.self_sk,
+                        req_id,
+                        "pending",
+                        &req,
+                    )
+                    .await;
+                }
+
+                for z in zones_to_query {
+                    ctx.udp_handle
+                        .request_dht_record(&z, &dht_scope, &dht_key)
+                        .await;
                 }
             }
         }
@@ -2289,5 +2644,159 @@ mod tests {
         }
 
         assert!(got_identity, "expected identity record by id");
+    }
+
+    #[tokio::test]
+    async fn web_bridge_swarm_dht_put_get_roundtrip() {
+        let (pk, sk) = nostr::generate_keypair();
+        let zone = "zone-test".to_string();
+        let zones = vec![zone.clone()];
+
+        let store = Arc::new(Mutex::new(SwarmStoreMap::new()));
+        let (local_tx, _local_rx) = mpsc::unbounded_channel::<Value>();
+
+        let tmp = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let bind_addr = tmp.local_addr().expect("addr");
+        drop(tmp);
+        let bind = bind_addr.to_string();
+
+        let validation = local_relay::ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 1024 * 1024,
+        };
+
+        let local_relay = local_relay::start_relays(
+            Some(bind.clone()),
+            None,
+            None,
+            relay::RelayPool::empty(),
+            validation.clone(),
+            Some(local_tx),
+        )
+        .await
+        .expect("start relay")
+        .expect("relay handle");
+
+        let udp_cfg = transport::UdpConfig {
+            node_id: "node-test".to_string(),
+            device_pk: pk.clone(),
+            zones: zones.clone(),
+            peers: vec![],
+            handshake_interval: Duration::from_secs(0),
+            peer_timeout: Duration::from_secs(10),
+            max_packet_bytes: 2048,
+            rate_limit_per_sec: 0,
+            request_fanout: 0,
+            request_max_hops: 0,
+            stun_servers: vec![],
+            stun_interval: Duration::from_secs(0),
+            swarm_endpoint_tx: None,
+            inbound_tx: None,
+        };
+        let udp_handle = Arc::new(
+            transport::start_udp_with_handle("127.0.0.1:0", udp_cfg)
+                .await
+                .expect("udp"),
+        );
+
+        let mut zone_keys = HashSet::new();
+        zone_keys.insert(zone.clone());
+
+        let ctx = InboundContext {
+            self_pk: pk.clone(),
+            self_sk: sk.clone(),
+            rebroadcast: false,
+            relay_pool: relay::RelayPool::empty(),
+            local_relay: Some(local_relay.clone()),
+            store: store.clone(),
+            udp_handle: udp_handle.clone(),
+            zones: zones.clone(),
+            zone_keys,
+            peer_set: Arc::new(Mutex::new(HashSet::new())),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            seen: Arc::new(Mutex::new(SeenCache::new())),
+            seen_ttl: Duration::from_secs(600),
+            seen_max: 1024,
+        };
+
+        let url = format!("ws://{}", bind);
+        let (ws, _) = tokio_tungstenite::connect_async(&url).await.expect("ws");
+        let (mut ws_tx, mut ws_rx) = ws.split();
+        ws_tx
+            .send(Message::Text(json!(["REQ", "sub", {}]).to_string()))
+            .await
+            .expect("req");
+
+        let put_payload = json!({
+            "type": "swarm_dht_put",
+            "zone": zone,
+            "scope": "presence",
+            "key": "peer-1",
+            "value": { "alive": true },
+            "requestId": "req-put",
+        });
+        let put_ev = build_app_event(&pk, &sk, &put_payload).expect("put event");
+        let put_val = serde_json::to_value(put_ev).expect("put value");
+        process_inbound_event(put_val, None, InboundSource::Local, ctx.clone()).await;
+
+        let get_payload = json!({
+            "type": "swarm_dht_get",
+            "zone": zone,
+            "scope": "presence",
+            "key": "peer-1",
+            "requestId": "req-get",
+        });
+        let get_ev = build_app_event(&pk, &sk, &get_payload).expect("get event");
+        let get_val = serde_json::to_value(get_ev).expect("get value");
+        process_inbound_event(get_val, None, InboundSource::Local, ctx).await;
+
+        let mut got_dht_record = false;
+        let mut got_complete = false;
+        let deadline = tokio::time::sleep(Duration::from_secs(2));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                msg = ws_rx.next() => {
+                    let msg = match msg {
+                        Some(Ok(Message::Text(txt))) => txt,
+                        _ => continue,
+                    };
+                    let v: Value = match serde_json::from_str(&msg) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let arr = match v.as_array() { Some(a) => a, None => continue };
+                    if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
+                        continue;
+                    }
+                    let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
+                    let content = ev_val.get("content").and_then(|v| v.as_str()).unwrap_or("");
+                    let payload: Value = match serde_json::from_str(content) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let kind = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if kind == "swarm_dht_record" && payload.get("requestId").and_then(|v| v.as_str()) == Some("req-get") {
+                        got_dht_record = true;
+                    }
+                    if kind == "swarm_record_response"
+                        && payload.get("requestId").and_then(|v| v.as_str()) == Some("req-get")
+                        && payload.get("status").and_then(|v| v.as_str()) == Some("complete") {
+                        got_complete = true;
+                    }
+                    if got_dht_record && got_complete {
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(got_dht_record, "expected dht record for req-get");
+        assert!(got_complete, "expected complete response for req-get");
     }
 }

@@ -73,6 +73,10 @@ enum UdpMessage {
         #[serde(default)]
         device_pk: Option<String>,
         #[serde(default)]
+        dht_scope: Option<String>,
+        #[serde(default)]
+        dht_key: Option<String>,
+        #[serde(default)]
         hops: u8,
         ts: u64,
     },
@@ -91,6 +95,8 @@ pub enum UdpInbound {
         types: Vec<String>,
         identity_id: Option<String>,
         device_pk: Option<String>,
+        dht_scope: Option<String>,
+        dht_key: Option<String>,
         hops: u8,
         from: SocketAddr,
     },
@@ -187,6 +193,8 @@ impl UdpHandle {
             types,
             identity_id: None,
             device_pk: None,
+            dht_scope: None,
+            dht_key: None,
             hops: 0,
             ts: now_ms(),
         };
@@ -204,6 +212,8 @@ impl UdpHandle {
             types: vec!["identity".to_string()],
             identity_id: Some(identity_id.to_string()),
             device_pk: None,
+            dht_scope: None,
+            dht_key: None,
             hops: 0,
             ts: now_ms(),
         };
@@ -223,6 +233,30 @@ impl UdpHandle {
             types: vec!["device".to_string()],
             identity_id: None,
             device_pk: Some(device_pk.to_string()),
+            dht_scope: None,
+            dht_key: None,
+            hops: 0,
+            ts: now_ms(),
+        };
+        for peer in peers {
+            let _ = self.outbound.send(UdpOutbound::SendTo(peer, msg.clone()));
+        }
+    }
+
+    pub async fn request_dht_record(&self, zone: &str, scope: &str, key: &str) {
+        let lookup = format!("{}:{}", scope, key);
+        let peers = self.select_peers(zone, Some(&lookup), None).await;
+        if peers.is_empty() {
+            return;
+        }
+        let msg = UdpMessage::RecordRequest {
+            v: UDP_PROTOCOL_VERSION,
+            zone: zone.to_string(),
+            types: vec!["dht".to_string()],
+            identity_id: None,
+            device_pk: None,
+            dht_scope: Some(scope.to_string()),
+            dht_key: Some(key.to_string()),
             hops: 0,
             ts: now_ms(),
         };
@@ -237,13 +271,24 @@ impl UdpHandle {
         types: Vec<String>,
         identity_id: Option<String>,
         device_pk: Option<String>,
+        dht_scope: Option<String>,
+        dht_key: Option<String>,
         hops: u8,
         exclude: Option<SocketAddr>,
     ) {
         if hops > self.request_max_hops {
             return;
         }
-        let key = identity_id.as_deref().or(device_pk.as_deref());
+        let dht_lookup = match (&dht_scope, &dht_key) {
+            (Some(scope), Some(key)) if !scope.is_empty() && !key.is_empty() => {
+                Some(format!("{}:{}", scope, key))
+            }
+            _ => None,
+        };
+        let key = identity_id
+            .as_deref()
+            .or(device_pk.as_deref())
+            .or(dht_lookup.as_deref());
         let mut peers = self.select_peers(zone, key, exclude).await;
         if peers.is_empty() {
             return;
@@ -254,6 +299,8 @@ impl UdpHandle {
             types,
             identity_id,
             device_pk,
+            dht_scope,
+            dht_key,
             hops,
             ts: now_ms(),
         };
@@ -632,6 +679,8 @@ async fn handle_message(
             types,
             identity_id,
             device_pk,
+            dht_scope,
+            dht_key,
             hops,
             ..
         } => {
@@ -660,6 +709,8 @@ async fn handle_message(
                     types,
                     identity_id,
                     device_pk,
+                    dht_scope,
+                    dht_key,
                     hops,
                     from,
                 });

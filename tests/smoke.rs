@@ -465,6 +465,66 @@ async fn udp_record_request_by_device() {
 }
 
 #[tokio::test]
+async fn udp_record_request_by_dht_key() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = tmp.local_addr().unwrap();
+    drop(tmp);
+    let bind = addr.to_string();
+
+    let cfg = constitute_gateway::transport::UdpConfig {
+        node_id: "node-c".to_string(),
+        device_pk: "pk-c".to_string(),
+        zones: vec!["zone-c".to_string()],
+        peers: vec![],
+        handshake_interval: Duration::from_secs(0),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 2048,
+        rate_limit_per_sec: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx),
+    };
+
+    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+        .await
+        .expect("start udp");
+
+    let msg = serde_json::json!({
+        "kind": "recordrequest",
+        "v": 1,
+        "zone": "zone-c",
+        "types": ["dht"],
+        "dht_scope": "presence",
+        "dht_key": "peer-42",
+        "ts": 1
+    });
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let payload = serde_json::to_vec(&msg).unwrap();
+    sock.send_to(&payload, &bind).await.unwrap();
+
+    let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    match inbound {
+        constitute_gateway::transport::UdpInbound::RecordRequest {
+            dht_scope, dht_key, ..
+        } => {
+            assert_eq!(dht_scope.as_deref(), Some("presence"));
+            assert_eq!(dht_key.as_deref(), Some("peer-42"));
+        }
+        _ => panic!("unexpected inbound variant"),
+    }
+
+    handle.stop();
+}
+#[tokio::test]
 async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
     let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
     let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();

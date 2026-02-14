@@ -17,6 +17,7 @@ Out of scope in this repo:
 - Active development branch: `initial-sprint`
 - Discovery schema alignment with web repo: in progress
 - Gateway relay + request/response record flow: implemented
+- DHT put/get over app channel + UDP targeted lookup: implemented
 - UDP targeted request forwarding (fanout + hop limits): implemented
 
 ## Architecture
@@ -59,9 +60,14 @@ Incoming app event (`kind=1`, tag `t=constitute`):
 - Optional: `requestId`, `timeoutMs`, `zone`
 - Optional targeted lookup fields: `identityId`, `devicePk`
 
+Incoming DHT events (`kind=1`, tag `t=constitute`):
+- `type = swarm_dht_get` with `scope/key` (`dhtScope/dhtKey` aliases supported)
+- `type = swarm_dht_put` with `scope/key/value` (`dhtScope/dhtKey` aliases supported)
+
 Gateway responses:
 - `swarm_identity_record`
 - `swarm_device_record`
+- `swarm_dht_record`
 - `swarm_record_response` with `status = pending|complete|timeout`
 
 ## Build and Test
@@ -129,3 +135,4 @@ Contributor workflow, branch hygiene, and coding conventions are documented in `
 - Expand DHT behavior from targeted request forwarding to fuller keyspace routing
 - Complete web-gateway convergence for browser transport fallback
 - Finalize Ubuntu Core validation and CI parity
+

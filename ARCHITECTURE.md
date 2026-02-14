@@ -18,7 +18,7 @@ The gateway **uses the same identity model and event schemas** as the web stack:
 1. **Discovery bootstrapping** via Nostr relays.
 2. **Swarm peer presence** via zone presence events.
 3. **Local gateway relay** for browser peers (Nostr-compatible; WS/WSS).
-4. **Swarm record store** for identity/device records (DHT seed).
+4. **Swarm record store** for identity/device/dht records (DHT seed).
 5. **UDP handshake + peer table** for native/native mesh (in progress).
 5. **STUN-based external endpoint discovery** for swarm advertisement (in progress).
 
@@ -147,7 +147,7 @@ Planned hardening:
 - [ ] Service packaging (Windows service + Ubuntu Core snap)
 
 ### Phase 3: Convergence with Web Swarm
-- [ ] Full compatibility with web swarm DHT resolution
+- [~] Full compatibility with web swarm DHT resolution (gateway-side put/get + UDP lookup delivered; web convergence pending)
 - [ ] Shared identity record resolution
 - [ ] Zone membership sync + presence durability
 

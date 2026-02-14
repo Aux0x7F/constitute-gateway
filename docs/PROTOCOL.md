@@ -43,9 +43,32 @@ Incoming event:
   - `devicePk`
   - `want: [identity, device]`
 
+Incoming DHT query event:
+- `type = swarm_dht_get`
+- Required:
+  - `scope` or `dhtScope`
+  - `key` or `dhtKey`
+- Optional:
+  - `zone`
+  - `requestId`
+  - `timeoutMs`
+
+Incoming DHT write event:
+- `type = swarm_dht_put`
+- Required:
+  - `scope` or `dhtScope`
+  - `key` or `dhtKey`
+  - `value`
+- Optional:
+  - `zone`
+  - `updatedAt`
+  - `expiresAt`
+  - `requestId`
+
 Outgoing events:
 - `swarm_identity_record`
 - `swarm_device_record`
+- `swarm_dht_record`
 - `swarm_record_response` with `status`:
   - `pending`
   - `complete`
@@ -53,10 +76,11 @@ Outgoing events:
 
 ## UDP Gateway Transport
 - Zone-scoped record gossip
-- Targeted record request by `identityId` or `devicePk`
+- Targeted record request by `identityId`, `devicePk`, or (`dhtScope`, `dhtKey`)
 - Fanout bounded by `udp_request_fanout`
 - Forwarding bounded by `udp_request_max_hops`
 - Message version is validated (`UDP_PROTOCOL_VERSION`)
 
 ## Compatibility Rule
 Any protocol change in this repo must remain convergent with the web repo protocol contracts.
+
