@@ -36,7 +36,8 @@ pub fn is_valid_zone_key(key: &str) -> bool {
     if k.len() != 20 {
         return false;
     }
-    k.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    k.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]

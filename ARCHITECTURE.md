@@ -6,7 +6,7 @@ This document captures the current architecture, alignment with the web repo, an
 The gateway is a native, minimal relay node that enables browser peers to discover and bridge into the swarm. It is a dependency for the web experience, not a parallel product. All protocol decisions here must converge with the web Constitute standard.
 
 ## Alignment With Web Repo
-**Authoritative reference**: `C:\projects\Constituency\constitute` (web repo).
+**Authoritative reference**: `https://github.com/Aux0x7F/constitute` (web repo).
 
 The gateway **uses the same identity model and event schemas** as the web stack:
 - **Identity = Nostr device keypair** (same as `identity/sw/nostr.js`).
@@ -155,7 +155,7 @@ Planned hardening:
 - [ ] Identity-owned gateway fleet (configuration + health via web UI)
 - [ ] Client-consumable health/metrics for relay selection + balancing
 
-## Non-Goals (for now)
+## Non-Goals
 - Full messaging or application data transport
 - Centralized account systems
 - Heavy orchestration or control panels

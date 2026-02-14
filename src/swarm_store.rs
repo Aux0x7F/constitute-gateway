@@ -47,21 +47,27 @@ impl SwarmStore {
                 if !should_replace(&self.identities, &info) {
                     return None;
                 }
-                self.identities.insert(info.key.clone(), StoredRecord {
-                    event: ev.clone(),
-                    updated_at: info.updated_at,
-                    expires_at: info.expires_at,
-                });
+                self.identities.insert(
+                    info.key.clone(),
+                    StoredRecord {
+                        event: ev.clone(),
+                        updated_at: info.updated_at,
+                        expires_at: info.expires_at,
+                    },
+                );
             }
             RecordType::Device => {
                 if !should_replace(&self.devices, &info) {
                     return None;
                 }
-                self.devices.insert(info.key.clone(), StoredRecord {
-                    event: ev.clone(),
-                    updated_at: info.updated_at,
-                    expires_at: info.expires_at,
-                });
+                self.devices.insert(
+                    info.key.clone(),
+                    StoredRecord {
+                        event: ev.clone(),
+                        updated_at: info.updated_at,
+                        expires_at: info.expires_at,
+                    },
+                );
             }
         }
         Some(record_type)
@@ -112,7 +118,9 @@ fn record_type(ev: &nostr::NostrEvent) -> Option<RecordType> {
         return None;
     }
     let tags = &ev.tags;
-    let has_tag = tags.iter().any(|t| t.get(0) == Some(&"t".to_string()) && t.get(1) == Some(&RECORD_TAG.to_string()));
+    let has_tag = tags
+        .iter()
+        .any(|t| t.get(0) == Some(&"t".to_string()) && t.get(1) == Some(&RECORD_TAG.to_string()));
     if !has_tag {
         return None;
     }
@@ -158,23 +166,45 @@ fn validate_record(ev: &nostr::NostrEvent, expected: RecordType) -> Option<Recor
 
     match expected {
         RecordType::Identity => {
-            let identity_id = payload.get("identityId").and_then(|v| v.as_str()).unwrap_or("");
+            let identity_id = payload
+                .get("identityId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if identity_id.is_empty() {
                 return None;
             }
-            let device_pks = payload.get("devicePks").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-            let has_device = device_pks.iter().any(|v| v.as_str() == Some(ev.pubkey.as_str()));
+            let device_pks = payload
+                .get("devicePks")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            let has_device = device_pks
+                .iter()
+                .any(|v| v.as_str() == Some(ev.pubkey.as_str()));
             if !has_device {
                 return None;
             }
-            Some(RecordInfo { key: identity_id.to_string(), updated_at, expires_at, event_id: ev.id.clone() })
+            Some(RecordInfo {
+                key: identity_id.to_string(),
+                updated_at,
+                expires_at,
+                event_id: ev.id.clone(),
+            })
         }
         RecordType::Device => {
-            let device_pk = payload.get("devicePk").and_then(|v| v.as_str()).unwrap_or("");
+            let device_pk = payload
+                .get("devicePk")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if device_pk.is_empty() || device_pk != ev.pubkey {
                 return None;
             }
-            Some(RecordInfo { key: device_pk.to_string(), updated_at, expires_at, event_id: ev.id.clone() })
+            Some(RecordInfo {
+                key: device_pk.to_string(),
+                updated_at,
+                expires_at,
+                event_id: ev.id.clone(),
+            })
         }
     }
 }
@@ -205,12 +235,18 @@ mod tests {
     use crate::nostr;
     use serde_json::json;
 
-    fn make_event(record_type: &str, content: serde_json::Value, pk: &str, sk: &str) -> nostr::NostrEvent {
+    fn make_event(
+        record_type: &str,
+        content: serde_json::Value,
+        pk: &str,
+        sk: &str,
+    ) -> nostr::NostrEvent {
         let tags = vec![
             vec!["t".to_string(), RECORD_TAG.to_string()],
             vec!["type".to_string(), record_type.to_string()],
         ];
-        let unsigned = nostr::build_unsigned_event(pk, RECORD_KIND, tags, content.to_string(), now_sec());
+        let unsigned =
+            nostr::build_unsigned_event(pk, RECORD_KIND, tags, content.to_string(), now_sec());
         nostr::sign_event(&unsigned, sk).expect("sign")
     }
 
@@ -252,7 +288,6 @@ mod tests {
     }
 }
 
-
 #[derive(Clone, Debug, Default)]
 pub struct SwarmStoreMap {
     stores: HashMap<String, SwarmStore>,
@@ -272,7 +307,11 @@ impl SwarmStoreMap {
         store.put_record(ev)
     }
 
-    pub fn put_record_all(&mut self, zones: &[String], ev: &nostr::NostrEvent) -> Option<RecordType> {
+    pub fn put_record_all(
+        &mut self,
+        zones: &[String],
+        ev: &nostr::NostrEvent,
+    ) -> Option<RecordType> {
         let mut stored = None;
         for zone in zones {
             if let Some(rt) = self.put_record_in_zone(zone, ev) {
@@ -296,6 +335,31 @@ impl SwarmStoreMap {
             .unwrap_or_default()
     }
 
+    pub fn get_identity_event_zone(&self, zone: &str, id: &str) -> Option<nostr::NostrEvent> {
+        self.stores.get(zone).and_then(|s| s.get_identity_event(id))
+    }
+
+    pub fn get_device_event_zone(&self, zone: &str, pk: &str) -> Option<nostr::NostrEvent> {
+        self.stores.get(zone).and_then(|s| s.get_device_event(pk))
+    }
+
+    pub fn get_identity_event_any(&self, id: &str) -> Option<nostr::NostrEvent> {
+        for store in self.stores.values() {
+            if let Some(ev) = store.get_identity_event(id) {
+                return Some(ev);
+            }
+        }
+        None
+    }
+
+    pub fn get_device_event_any(&self, pk: &str) -> Option<nostr::NostrEvent> {
+        for store in self.stores.values() {
+            if let Some(ev) = store.get_device_event(pk) {
+                return Some(ev);
+            }
+        }
+        None
+    }
     pub fn list_identity_events_all(&self) -> Vec<nostr::NostrEvent> {
         let mut out = Vec::new();
         for store in self.stores.values() {

@@ -77,7 +77,13 @@ pub struct SwarmDeviceRecord {
 }
 
 impl SwarmDeviceRecord {
-    pub fn new(device_pk: &str, identity_id: &str, device_label: &str, role: &str, relays: Vec<String>) -> Self {
+    pub fn new(
+        device_pk: &str,
+        identity_id: &str,
+        device_label: &str,
+        role: &str,
+        relays: Vec<String>,
+    ) -> Self {
         let now = now_ms();
         Self {
             device_pk: device_pk.to_string(),
@@ -107,6 +113,7 @@ struct ZonePresencePayload {
     #[serde(default)]
     relays: Vec<String>,
     #[serde(default)]
+    #[allow(dead_code)]
     metrics: Option<GatewayMetrics>,
     ts: u64,
     ttl: u64,
@@ -166,13 +173,15 @@ impl DiscoveryClient {
             }
         }
     }
-
+    #[allow(dead_code)]
     pub fn test_envelope_json(&self) -> String {
-        self.device_record_json().unwrap_or_else(|_| "[]".to_string())
+        self.device_record_json()
+            .unwrap_or_else(|_| "[]".to_string())
     }
-
+    #[allow(dead_code)]
     pub fn test_zone_presence_json(&self, zone: &str) -> String {
-        self.zone_presence_json(zone).unwrap_or_else(|_| "[]".to_string())
+        self.zone_presence_json(zone)
+            .unwrap_or_else(|_| "[]".to_string())
     }
 
     fn device_record_json(&self) -> Result<String> {

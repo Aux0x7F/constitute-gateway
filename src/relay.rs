@@ -22,7 +22,7 @@ impl RelayPool {
         }
         Self { relays }
     }
-
+    #[allow(dead_code)]
     pub fn empty() -> Self {
         Self { relays: Vec::new() }
     }
@@ -44,7 +44,11 @@ struct RelayHandle {
 }
 
 impl RelayHandle {
-    fn spawn(url: String, filters_json: String, inbound: Option<mpsc::UnboundedSender<String>>) -> Self {
+    fn spawn(
+        url: String,
+        filters_json: String,
+        inbound: Option<mpsc::UnboundedSender<String>>,
+    ) -> Self {
         let (tx, mut rx) = mpsc::unbounded_channel::<String>();
         tokio::spawn(async move {
             loop {

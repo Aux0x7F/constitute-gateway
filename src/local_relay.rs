@@ -1,24 +1,27 @@
 use anyhow::{anyhow, Result};
 use futures_util::{SinkExt, StreamExt};
+use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 use serde_json::{json, Value};
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::BufReader;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, mpsc, Mutex};
 use tokio::time::{Duration, Instant};
-use tokio_rustls::rustls::{pki_types::{CertificateDer, PrivateKeyDer}, ServerConfig};
+use tokio_rustls::rustls::{
+    pki_types::{CertificateDer, PrivateKeyDer},
+    ServerConfig,
+};
 use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::accept_async;
 use tokio_tungstenite::tungstenite::Message;
-use rustls_pemfile::{certs, pkcs8_private_keys, rsa_private_keys};
 
-use crate::relay::RelayPool;
 use crate::nostr;
+use crate::relay::RelayPool;
 
 const CACHE_MAX: usize = 512;
 const DEDUPE_MAX: usize = 4096;
@@ -32,6 +35,8 @@ pub struct TlsConfig {
 pub struct ValidationConfig {
     pub replay_window: Duration,
     pub replay_skew: Duration,
+    pub rate_limit_per_sec: u32,
+    pub max_frame_bytes: usize,
 }
 
 #[derive(Clone)]
@@ -45,7 +50,14 @@ pub struct LocalRelayHandle {
 
 impl LocalRelayHandle {
     pub async fn publish_event(&self, ev: Value) {
-        let _ = publish_event(ev, &self.sender, &self.cache, &self.dedupe, &self.validation).await;
+        let _ = publish_event(
+            ev,
+            &self.sender,
+            &self.cache,
+            &self.dedupe,
+            &self.validation,
+        )
+        .await;
     }
 
     pub fn client_count(&self) -> usize {
@@ -63,7 +75,10 @@ pub async fn start_relays(
 ) -> Result<Option<LocalRelayHandle>> {
     let (sender, _rx) = broadcast::channel(1024);
     let cache = Arc::new(Mutex::new(EventCache::new(CACHE_MAX)));
-    let dedupe = Arc::new(Mutex::new(Deduper::new(validation.replay_window, DEDUPE_MAX)));
+    let dedupe = Arc::new(Mutex::new(Deduper::new(
+        validation.replay_window,
+        DEDUPE_MAX,
+    )));
     let client_count = Arc::new(AtomicUsize::new(0));
 
     let mut started = false;
@@ -110,7 +125,13 @@ pub async fn start_relays(
         return Ok(None);
     }
 
-    Ok(Some(LocalRelayHandle { sender, cache, dedupe, client_count, validation }))
+    Ok(Some(LocalRelayHandle {
+        sender,
+        cache,
+        dedupe,
+        client_count,
+        validation,
+    }))
 }
 
 fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
@@ -140,7 +161,10 @@ fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
             .collect();
     }
 
-    let key = keys.into_iter().next().ok_or_else(|| anyhow!("no tls key found"))?;
+    let key = keys
+        .into_iter()
+        .next()
+        .ok_or_else(|| anyhow!("no tls key found"))?;
     let cfg = ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
@@ -172,7 +196,19 @@ fn spawn_ws_listener(
                     let validation = validation.clone();
                     let inbound_tx = inbound_tx.clone();
                     tokio::spawn(async move {
-                        if let Err(err) = handle_client(stream, addr, tx, upstream, cache, dedupe, client_count, validation, inbound_tx).await {
+                        if let Err(err) = handle_client(
+                            stream,
+                            addr,
+                            tx,
+                            upstream,
+                            cache,
+                            dedupe,
+                            client_count,
+                            validation,
+                            inbound_tx,
+                        )
+                        .await
+                        {
                             tracing::warn!(client = %addr, error = %err, "relay client error");
                         }
                     });
@@ -213,7 +249,19 @@ fn spawn_wss_listener(
                     tokio::spawn(async move {
                         match acceptor.accept(stream).await {
                             Ok(tls_stream) => {
-                                if let Err(err) = handle_client(tls_stream, addr, tx, upstream, cache, dedupe, client_count, validation, inbound_tx).await {
+                                if let Err(err) = handle_client(
+                                    tls_stream,
+                                    addr,
+                                    tx,
+                                    upstream,
+                                    cache,
+                                    dedupe,
+                                    client_count,
+                                    validation,
+                                    inbound_tx,
+                                )
+                                .await
+                                {
                                     tracing::warn!(client = %addr, error = %err, "relay client error");
                                 }
                             }
@@ -249,11 +297,14 @@ struct Filter {
 impl Filter {
     fn from_value(val: &Value) -> Option<Self> {
         let obj = val.as_object()?;
-        let kinds = obj.get("kinds").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_u64()).collect::<Vec<_>>()
-        });
+        let kinds = obj
+            .get("kinds")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_u64()).collect::<Vec<_>>());
         let authors = obj.get("authors").and_then(|v| v.as_array()).map(|arr| {
-            arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect::<Vec<_>>()
         });
         let since = obj.get("since").and_then(|v| v.as_u64());
         let until = obj.get("until").and_then(|v| v.as_u64());
@@ -263,12 +314,23 @@ impl Filter {
                 continue;
             }
             let key = k.trim_start_matches('#').to_string();
-            let vals = v.as_array().map(|arr| {
-                arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>()
-            }).unwrap_or_default();
+            let vals = v
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
             tags.insert(key, vals);
         }
-        Some(Self { kinds, authors, since, until, tags })
+        Some(Self {
+            kinds,
+            authors,
+            since,
+            until,
+            tags,
+        })
     }
 
     fn matches(&self, ev: &Value) -> bool {
@@ -311,7 +373,10 @@ struct EventCache {
 
 impl EventCache {
     fn new(max: usize) -> Self {
-        Self { entries: VecDeque::new(), max }
+        Self {
+            entries: VecDeque::new(),
+            max,
+        }
     }
 
     fn push(&mut self, ev: Value) {
@@ -335,7 +400,12 @@ struct Deduper {
 
 impl Deduper {
     fn new(ttl: Duration, max: usize) -> Self {
-        Self { seen: HashMap::new(), order: VecDeque::new(), ttl, max }
+        Self {
+            seen: HashMap::new(),
+            order: VecDeque::new(),
+            ttl,
+            max,
+        }
     }
 
     fn seen_or_insert(&mut self, id: &str) -> bool {
@@ -348,7 +418,11 @@ impl Deduper {
         self.seen.insert(id.to_string(), now);
         self.order.push_back(id.to_string());
         while let Some(front) = self.order.front() {
-            let expired = self.seen.get(front).map(|t| t.elapsed() > self.ttl).unwrap_or(true);
+            let expired = self
+                .seen
+                .get(front)
+                .map(|t| t.elapsed() > self.ttl)
+                .unwrap_or(true);
             let over = self.seen.len() > self.max;
             if !expired && !over {
                 break;
@@ -381,7 +455,6 @@ impl Drop for ClientGuard {
         self.counter.fetch_sub(1, Ordering::Relaxed);
     }
 }
-
 
 fn validate_event(ev: &Value, cfg: &ValidationConfig) -> bool {
     let event: nostr::NostrEvent = match serde_json::from_value(ev.clone()) {
@@ -487,6 +560,8 @@ where
     let (mut ws_tx, mut ws_rx) = ws.split();
     let mut subs: Vec<Subscription> = Vec::new();
     let mut rx = sender.subscribe();
+    let mut rate_window = Instant::now();
+    let mut rate_count: u32 = 0;
 
     tracing::info!(client = %addr, "relay client connected");
 
@@ -495,6 +570,22 @@ where
             msg = ws_rx.next() => {
                 match msg {
                     Some(Ok(Message::Text(txt))) => {
+                        if validation.max_frame_bytes > 0 && txt.len() > validation.max_frame_bytes {
+                            tracing::warn!(client = %addr, len = txt.len(), "relay frame too large");
+                            continue;
+                        }
+                        if validation.rate_limit_per_sec > 0 {
+                            let now = Instant::now();
+                            if now.duration_since(rate_window) >= Duration::from_secs(1) {
+                                rate_window = now;
+                                rate_count = 0;
+                            }
+                            rate_count += 1;
+                            if rate_count > validation.rate_limit_per_sec {
+                                tracing::warn!(client = %addr, rate = validation.rate_limit_per_sec, "relay rate limit exceeded");
+                                break;
+                            }
+                        }
                         if handle_req(&txt, &mut subs, &cache, &mut ws_tx).await? {
                             continue;
                         }
@@ -586,7 +677,10 @@ where
         filters.push(Filter::default());
     }
     subs.retain(|s| s.id != sub_id);
-    subs.push(Subscription { id: sub_id.clone(), filters: filters.clone() });
+    subs.push(Subscription {
+        id: sub_id.clone(),
+        filters: filters.clone(),
+    });
 
     let snapshot = {
         let guard = cache.lock().await;
@@ -674,12 +768,15 @@ fn is_allowed_event(ev: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Deduper, EventCache, Filter, ValidationConfig, event_has_tag_any, spawn_ws_listener, validate_event};
+    use super::{
+        event_has_tag_any, spawn_ws_listener, validate_event, Deduper, EventCache, Filter,
+        ValidationConfig,
+    };
     use crate::nostr;
     use crate::relay::RelayPool;
     use futures_util::SinkExt;
     use serde_json::{json, Value};
-    use std::sync::{Arc, atomic::AtomicUsize};
+    use std::sync::{atomic::AtomicUsize, Arc};
     use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio::sync::{broadcast, Mutex};
@@ -690,7 +787,8 @@ mod tests {
         let filter = Filter::from_value(&json!({
             "kinds": [1],
             "#t": ["constitute"],
-        })).expect("filter");
+        }))
+        .expect("filter");
         let ev = json!({
             "kind": 1,
             "pubkey": "pk",
@@ -704,7 +802,8 @@ mod tests {
     fn filter_rejects_missing_tag() {
         let filter = Filter::from_value(&json!({
             "#t": ["constitute"],
-        })).expect("filter");
+        }))
+        .expect("filter");
         let ev = json!({
             "kind": 1,
             "pubkey": "pk",
@@ -722,141 +821,222 @@ mod tests {
         assert!(event_has_tag_any(&ev, "t", &["constitute".to_string()]));
     }
 
+    fn build_signed_event(content: &str, created_at: u64) -> nostr::NostrEvent {
+        let (pk, sk) = nostr::generate_keypair();
+        let tags = vec![vec!["t".to_string(), "constitute".to_string()]];
+        let unsigned = nostr::build_unsigned_event(&pk, 1, tags, content.to_string(), created_at);
+        nostr::sign_event(&unsigned, &sk).expect("sign event")
+    }
 
-fn build_signed_event(content: &str, created_at: u64) -> nostr::NostrEvent {
-    let (pk, sk) = nostr::generate_keypair();
-    let tags = vec![vec!["t".to_string(), "constitute".to_string()]];
-    let unsigned = nostr::build_unsigned_event(&pk, 1, tags, content.to_string(), created_at);
-    nostr::sign_event(&unsigned, &sk).expect("sign event")
-}
+    #[test]
+    fn reject_invalid_signature() {
+        let cfg = ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 1024 * 1024,
+        };
+        let now = crate::util::now_unix_seconds();
+        let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
+        let mut ev = build_signed_event(&content, now);
+        ev.sig = "00".to_string();
+        let val = serde_json::to_value(ev).expect("event to value");
+        assert!(!validate_event(&val, &cfg));
+    }
 
-#[test]
-fn reject_invalid_signature() {
-    let cfg = ValidationConfig {
-        replay_window: Duration::from_secs(600),
-        replay_skew: Duration::from_secs(120),
-    };
-    let now = crate::util::now_unix_seconds();
-    let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
-    let mut ev = build_signed_event(&content, now);
-    ev.sig = "00".to_string();
-    let val = serde_json::to_value(ev).expect("event to value");
-    assert!(!validate_event(&val, &cfg));
-}
+    #[test]
+    fn reject_expired_ttl() {
+        let cfg = ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 1024 * 1024,
+        };
+        let now = crate::util::now_unix_seconds();
+        let old_ts = (now.saturating_sub(700) as i64) * 1000;
+        let content = json!({"type":"swarm_signal","ts": old_ts, "ttl": 120}).to_string();
+        let ev = build_signed_event(&content, now);
+        let val = serde_json::to_value(ev).expect("event to value");
+        assert!(!validate_event(&val, &cfg));
+    }
 
-#[test]
-fn reject_expired_ttl() {
-    let cfg = ValidationConfig {
-        replay_window: Duration::from_secs(600),
-        replay_skew: Duration::from_secs(120),
-    };
-    let now = crate::util::now_unix_seconds();
-    let old_ts = (now.saturating_sub(700) as i64) * 1000;
-    let content = json!({"type":"swarm_signal","ts": old_ts, "ttl": 120}).to_string();
-    let ev = build_signed_event(&content, now);
-    let val = serde_json::to_value(ev).expect("event to value");
-    assert!(!validate_event(&val, &cfg));
-}
+    #[test]
+    fn accept_valid_signed_event() {
+        let cfg = ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 1024 * 1024,
+        };
+        let now = crate::util::now_unix_seconds();
+        let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
+        let ev = build_signed_event(&content, now);
+        let val = serde_json::to_value(ev).expect("event to value");
+        assert!(validate_event(&val, &cfg));
+    }
 
-#[test]
-fn accept_valid_signed_event() {
-    let cfg = ValidationConfig {
-        replay_window: Duration::from_secs(600),
-        replay_skew: Duration::from_secs(120),
-    };
-    let now = crate::util::now_unix_seconds();
-    let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
-    let ev = build_signed_event(&content, now);
-    let val = serde_json::to_value(ev).expect("event to value");
-    assert!(validate_event(&val, &cfg));
-}
+    #[tokio::test]
+    async fn relay_forwards_valid_event_between_two_local_clients() {
+        use futures_util::StreamExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let bind = addr.to_string();
 
-#[tokio::test]
-async fn relay_forwards_valid_event_between_two_local_clients() {
-    use futures_util::StreamExt;
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-    let addr = listener.local_addr().expect("local addr");
-    let bind = addr.to_string();
+        let (sender, _rx) = broadcast::channel(32);
+        let cache = Arc::new(Mutex::new(EventCache::new(64)));
+        let dedupe = Arc::new(Mutex::new(Deduper::new(Duration::from_secs(600), 128)));
+        let client_count = Arc::new(AtomicUsize::new(0));
+        let validation = ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 1024 * 1024,
+        };
 
-    let (sender, _rx) = broadcast::channel(32);
-    let cache = Arc::new(Mutex::new(EventCache::new(64)));
-    let dedupe = Arc::new(Mutex::new(Deduper::new(Duration::from_secs(600), 128)));
-    let client_count = Arc::new(AtomicUsize::new(0));
-    let validation = ValidationConfig {
-        replay_window: Duration::from_secs(600),
-        replay_skew: Duration::from_secs(120),
-    };
+        spawn_ws_listener(
+            listener,
+            bind.clone(),
+            sender.clone(),
+            cache.clone(),
+            dedupe.clone(),
+            RelayPool::empty(),
+            client_count.clone(),
+            validation.clone(),
+            None,
+        );
 
-    spawn_ws_listener(
-        listener,
-        bind.clone(),
-        sender.clone(),
-        cache.clone(),
-        dedupe.clone(),
-        RelayPool::empty(),
-        client_count.clone(),
-        validation.clone(),
-        None,
-    );
+        let url = format!("ws://{}", bind);
+        let (ws1, _) = tokio_tungstenite::connect_async(&url).await.expect("ws1");
+        let (mut w1_tx, _w1_rx) = ws1.split();
 
-    let url = format!("ws://{}", bind);
-    let (ws1, _) = tokio_tungstenite::connect_async(&url).await.expect("ws1");
-    let (mut w1_tx, _w1_rx) = ws1.split();
+        let (ws2, _) = tokio_tungstenite::connect_async(&url).await.expect("ws2");
+        let (mut w2_tx, mut w2_rx) = ws2.split();
 
-    let (ws2, _) = tokio_tungstenite::connect_async(&url).await.expect("ws2");
-    let (mut w2_tx, mut w2_rx) = ws2.split();
+        let req = json!(["REQ", "sub", {}]).to_string();
+        w2_tx.send(Message::Text(req)).await.expect("req");
 
-    let req = json!(["REQ", "sub", {}]).to_string();
-    w2_tx.send(Message::Text(req)).await.expect("req");
+        let now = crate::util::now_unix_seconds();
+        let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
+        let ev = build_signed_event(&content, now);
+        let ev_id = ev.id.clone();
+        let frame = json!(["EVENT", ev]).to_string();
+        w1_tx.send(Message::Text(frame)).await.expect("send event");
 
-    let now = crate::util::now_unix_seconds();
-    let content = json!({"type":"swarm_signal","ts": now * 1000, "ttl": 120}).to_string();
-    let ev = build_signed_event(&content, now);
-    let ev_id = ev.id.clone();
-    let frame = json!(["EVENT", ev]).to_string();
-    w1_tx.send(Message::Text(frame)).await.expect("send event");
-
-    let mut received = false;
-    let deadline = tokio::time::sleep(Duration::from_secs(2));
-    tokio::pin!(deadline);
-    loop {
-        tokio::select! {
-            _ = &mut deadline => break,
-            msg = w2_rx.next() => {
-                match msg {
-                    Some(Ok(Message::Text(txt))) => {
-                        let v: Value = match serde_json::from_str(&txt) {
-                            Ok(v) => v,
-                            Err(_) => continue,
-                        };
-                        let arr = match v.as_array() {
-                            Some(a) => a,
-                            None => continue,
-                        };
-                        if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
-                            continue;
+        let mut received = false;
+        let deadline = tokio::time::sleep(Duration::from_secs(2));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                msg = w2_rx.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(txt))) => {
+                            let v: Value = match serde_json::from_str(&txt) {
+                                Ok(v) => v,
+                                Err(_) => continue,
+                            };
+                            let arr = match v.as_array() {
+                                Some(a) => a,
+                                None => continue,
+                            };
+                            if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
+                                continue;
+                            }
+                            let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
+                            let id = ev_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            if id == ev_id {
+                                received = true;
+                                break;
+                            }
                         }
-                        let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
-                        let id = ev_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        if id == ev_id {
-                            received = true;
-                            break;
-                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
         }
+
+        assert!(received, "expected forwarded event");
     }
 
-    assert!(received, "expected forwarded event");
+    #[tokio::test]
+    async fn rejects_oversized_frame() {
+        use futures_util::StreamExt;
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let bind = addr.to_string();
+
+        let (sender, _rx) = broadcast::channel(32);
+        let cache = Arc::new(Mutex::new(EventCache::new(64)));
+        let dedupe = Arc::new(Mutex::new(Deduper::new(Duration::from_secs(600), 128)));
+        let client_count = Arc::new(AtomicUsize::new(0));
+        let validation = ValidationConfig {
+            replay_window: Duration::from_secs(600),
+            replay_skew: Duration::from_secs(120),
+            rate_limit_per_sec: 0,
+            max_frame_bytes: 32,
+        };
+
+        spawn_ws_listener(
+            listener,
+            bind.clone(),
+            sender.clone(),
+            cache.clone(),
+            dedupe.clone(),
+            RelayPool::empty(),
+            client_count.clone(),
+            validation.clone(),
+            None,
+        );
+
+        let url = format!("ws://{}", bind);
+        let (ws1, _) = tokio_tungstenite::connect_async(&url).await.expect("ws1");
+        let (mut w1_tx, _w1_rx) = ws1.split();
+
+        let (ws2, _) = tokio_tungstenite::connect_async(&url).await.expect("ws2");
+        let (mut w2_tx, mut w2_rx) = ws2.split();
+
+        let req = json!(["REQ", "sub", {}]).to_string();
+        w2_tx.send(Message::Text(req)).await.expect("req");
+
+        // drain initial EOSE/event cache messages
+        let drain_deadline = tokio::time::sleep(Duration::from_millis(200));
+        tokio::pin!(drain_deadline);
+        loop {
+            tokio::select! {
+                _ = &mut drain_deadline => break,
+                msg = w2_rx.next() => {
+                    if msg.is_none() { break; }
+                }
+            }
+        }
+
+        let big = "X".repeat(128);
+        w1_tx.send(Message::Text(big)).await.expect("send");
+
+        let mut saw_event = false;
+        let deadline = tokio::time::sleep(Duration::from_millis(200));
+        tokio::pin!(deadline);
+        loop {
+            tokio::select! {
+                _ = &mut deadline => break,
+                msg = w2_rx.next() => {
+                    let txt = match msg {
+                        Some(Ok(Message::Text(txt))) => txt,
+                        _ => continue,
+                    };
+                    let v: Value = match serde_json::from_str(&txt) {
+                        Ok(v) => v,
+                        Err(_) => continue,
+                    };
+                    let arr = match v.as_array() { Some(a) => a, None => continue };
+                    if arr.get(0).and_then(|v| v.as_str()) == Some("EVENT") {
+                        saw_event = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(!saw_event, "oversized frame should not be forwarded");
+    }
 }
-}
-
-
-
-
-
-
-
-

@@ -1,7 +1,8 @@
+use crate::nostr::NostrEvent;
 use anyhow::Result;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use crate::nostr::NostrEvent;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -26,7 +27,8 @@ pub struct UdpConfig {
     pub peer_timeout: Duration,
     pub max_packet_bytes: usize,
     pub rate_limit_per_sec: u32,
-    pub udp_sync_interval_secs: u64,
+    pub request_fanout: usize,
+    pub request_max_hops: u8,
     pub stun_servers: Vec<String>,
     pub stun_interval: Duration,
     pub swarm_endpoint_tx: Option<watch::Sender<String>>,
@@ -61,10 +63,15 @@ enum UdpMessage {
         v: u8,
         zone: String,
         types: Vec<String>,
+        #[serde(default)]
+        identity_id: Option<String>,
+        #[serde(default)]
+        device_pk: Option<String>,
+        #[serde(default)]
+        hops: u8,
         ts: u64,
     },
 }
-
 
 #[derive(Clone, Debug)]
 pub enum UdpInbound {
@@ -77,6 +84,9 @@ pub enum UdpInbound {
     RecordRequest {
         zone: String,
         types: Vec<String>,
+        identity_id: Option<String>,
+        device_pk: Option<String>,
+        hops: u8,
         from: SocketAddr,
     },
 }
@@ -102,19 +112,27 @@ pub struct UdpHandle {
     table: Arc<Mutex<HashMap<SocketAddr, PeerInfo>>>,
     peers: Arc<Mutex<Vec<SocketAddr>>>,
     outbound: mpsc::UnboundedSender<UdpOutbound>,
+    #[allow(dead_code)]
     task: tokio::task::JoinHandle<Result<()>>,
+    request_fanout: usize,
+    request_max_hops: u8,
 }
 
 impl UdpHandle {
+    #[allow(dead_code)]
     pub fn stop(self) {
         self.task.abort();
     }
-
+    #[allow(dead_code)]
+    pub fn request_max_hops(&self) -> u8 {
+        self.request_max_hops
+    }
+    #[allow(dead_code)]
     pub async fn confirmed_count(&self) -> usize {
         let guard = self.table.lock().await;
         guard.values().filter(|p| p.confirmed).count()
     }
-
+    #[allow(dead_code)]
     pub async fn confirmed_peers(&self) -> Vec<SocketAddr> {
         let guard = self.table.lock().await;
         guard
@@ -139,7 +157,13 @@ impl UdpHandle {
         let _ = self.outbound.send(UdpOutbound::Broadcast(msg));
     }
 
-    pub fn send_record_to(&self, addr: SocketAddr, zone: &str, record_type: &str, event: NostrEvent) {
+    pub fn send_record_to(
+        &self,
+        addr: SocketAddr,
+        zone: &str,
+        record_type: &str,
+        event: NostrEvent,
+    ) {
         let msg = UdpMessage::Record {
             v: UDP_PROTOCOL_VERSION,
             zone: zone.to_string(),
@@ -151,20 +175,155 @@ impl UdpHandle {
     }
 
     pub fn request_records(&self, zone: &str, types: Vec<String>) {
-        let msg = UdpMessage::RecordRequest { v: UDP_PROTOCOL_VERSION, zone: zone.to_string(), types, ts: now_ms() };
+        let msg = UdpMessage::RecordRequest {
+            v: UDP_PROTOCOL_VERSION,
+            zone: zone.to_string(),
+            types,
+            identity_id: None,
+            device_pk: None,
+            hops: 0,
+            ts: now_ms(),
+        };
         let _ = self.outbound.send(UdpOutbound::Broadcast(msg));
     }
 
+    pub async fn request_identity_record(&self, zone: &str, identity_id: &str) {
+        let peers = self.select_peers(zone, Some(identity_id), None).await;
+        if peers.is_empty() {
+            return;
+        }
+        let msg = UdpMessage::RecordRequest {
+            v: UDP_PROTOCOL_VERSION,
+            zone: zone.to_string(),
+            types: vec!["identity".to_string()],
+            identity_id: Some(identity_id.to_string()),
+            device_pk: None,
+            hops: 0,
+            ts: now_ms(),
+        };
+        for peer in peers {
+            let _ = self.outbound.send(UdpOutbound::SendTo(peer, msg.clone()));
+        }
+    }
+
+    pub async fn request_device_record(&self, zone: &str, device_pk: &str) {
+        let peers = self.select_peers(zone, Some(device_pk), None).await;
+        if peers.is_empty() {
+            return;
+        }
+        let msg = UdpMessage::RecordRequest {
+            v: UDP_PROTOCOL_VERSION,
+            zone: zone.to_string(),
+            types: vec!["device".to_string()],
+            identity_id: None,
+            device_pk: Some(device_pk.to_string()),
+            hops: 0,
+            ts: now_ms(),
+        };
+        for peer in peers {
+            let _ = self.outbound.send(UdpOutbound::SendTo(peer, msg.clone()));
+        }
+    }
+
+    pub async fn forward_record_request(
+        &self,
+        zone: &str,
+        types: Vec<String>,
+        identity_id: Option<String>,
+        device_pk: Option<String>,
+        hops: u8,
+        exclude: Option<SocketAddr>,
+    ) {
+        if hops > self.request_max_hops {
+            return;
+        }
+        let key = identity_id.as_deref().or(device_pk.as_deref());
+        let mut peers = self.select_peers(zone, key, exclude).await;
+        if peers.is_empty() {
+            return;
+        }
+        let msg = UdpMessage::RecordRequest {
+            v: UDP_PROTOCOL_VERSION,
+            zone: zone.to_string(),
+            types,
+            identity_id,
+            device_pk,
+            hops,
+            ts: now_ms(),
+        };
+        for peer in peers.drain(..) {
+            let _ = self.outbound.send(UdpOutbound::SendTo(peer, msg.clone()));
+        }
+    }
+
+    async fn select_peers(
+        &self,
+        zone: &str,
+        key: Option<&str>,
+        exclude: Option<SocketAddr>,
+    ) -> Vec<SocketAddr> {
+        let mut scored: Vec<(SocketAddr, [u8; 32])> = {
+            let guard = self.table.lock().await;
+            guard
+                .iter()
+                .filter_map(|(addr, info)| {
+                    if !info.confirmed || !info.zones.iter().any(|z| z == zone) {
+                        return None;
+                    }
+                    if let Some(ex) = exclude {
+                        if *addr == ex {
+                            return None;
+                        }
+                    }
+                    let score = if let Some(k) = key {
+                        xor_distance(&key_bytes(k), &peer_bytes(&info.device_pk))
+                    } else {
+                        let zero = [0u8; 32];
+                        zero
+                    };
+                    Some((*addr, score))
+                })
+                .collect()
+        };
+
+        if scored.is_empty() {
+            let mut fallback = self.peers.lock().await.clone();
+            if let Some(ex) = exclude {
+                fallback.retain(|p| *p != ex);
+            }
+            if fallback.is_empty() {
+                return Vec::new();
+            }
+            fallback.sort_by_key(|addr| addr.to_string());
+            let fanout = self.request_fanout;
+            if fanout == 0 || fanout >= fallback.len() {
+                return fallback;
+            }
+            return fallback.into_iter().take(fanout).collect();
+        }
+
+        scored.sort_by(|a, b| a.1.cmp(&b.1));
+
+        let fanout = self.request_fanout;
+        let mut out = Vec::new();
+        for (addr, _) in scored.into_iter() {
+            out.push(addr);
+            if fanout != 0 && out.len() >= fanout {
+                break;
+            }
+        }
+        out
+    }
+    #[allow(dead_code)]
     pub async fn broadcast_from_zone(&self, zone: &str, record_type: &str, event: NostrEvent) {
         let snapshot = { self.peers.lock().await.clone() };
         for addr in snapshot {
             self.send_record_to(addr, zone, record_type, event.clone());
         }
     }
-
 }
 
-
+#[allow(dead_code)]
 pub async fn start_udp(bind: &str, cfg: UdpConfig) -> Result<()> {
     let socket = Arc::new(UdpSocket::bind(bind).await?);
     tracing::info!(bind = %bind, "udp listener ready");
@@ -189,9 +348,20 @@ pub async fn start_udp_with_handle(bind: &str, cfg: UdpConfig) -> Result<UdpHand
     let socket_clone = socket.clone();
     let (out_tx, out_rx) = mpsc::unbounded_channel();
 
-    let task = tokio::spawn(async move { run_udp_loop(socket_clone, cfg, peers_clone, table_clone, out_rx).await });
+    let request_fanout = cfg.request_fanout;
+    let request_max_hops = cfg.request_max_hops;
+    let task = tokio::spawn(async move {
+        run_udp_loop(socket_clone, cfg, peers_clone, table_clone, out_rx).await
+    });
 
-    Ok(UdpHandle { table, peers, outbound: out_tx, task })
+    Ok(UdpHandle {
+        table,
+        peers,
+        outbound: out_tx,
+        task,
+        request_fanout,
+        request_max_hops,
+    })
 }
 
 async fn run_udp_loop(
@@ -352,11 +522,27 @@ async fn handle_message(
     cfg: &UdpConfig,
 ) {
     match msg {
-        UdpMessage::Hello { v, node_id, device_pk, zones, .. } => {
+        UdpMessage::Hello {
+            v,
+            node_id,
+            device_pk,
+            zones,
+            ..
+        } => {
             if !version_ok(v) {
                 return;
             }
-            if !note_peer_inbound(table, from, node_id.clone(), device_pk.clone(), zones.clone(), false, cfg.rate_limit_per_sec).await {
+            if !note_peer_inbound(
+                table,
+                from,
+                node_id.clone(),
+                device_pk.clone(),
+                zones.clone(),
+                false,
+                cfg.rate_limit_per_sec,
+            )
+            .await
+            {
                 return;
             }
             let reply = UdpMessage::Ack {
@@ -366,47 +552,118 @@ async fn handle_message(
                 zones: cfg.zones.clone(),
                 ts: now_ms(),
             };
-            send_message(socket, from, &reply, cfg.max_packet_bytes.max(256).min(65507)).await;
+            send_message(
+                socket,
+                from,
+                &reply,
+                cfg.max_packet_bytes.max(256).min(65507),
+            )
+            .await;
         }
-        UdpMessage::Ack { v, node_id, device_pk, zones, .. } => {
+        UdpMessage::Ack {
+            v,
+            node_id,
+            device_pk,
+            zones,
+            ..
+        } => {
             if !version_ok(v) {
                 return;
             }
-            let _ = note_peer_inbound(table, from, node_id, device_pk, zones, true, cfg.rate_limit_per_sec).await;
+            let _ = note_peer_inbound(
+                table,
+                from,
+                node_id,
+                device_pk,
+                zones,
+                true,
+                cfg.rate_limit_per_sec,
+            )
+            .await;
         }
-        UdpMessage::Record { v, zone, record_type, event, .. } => {
+        UdpMessage::Record {
+            v,
+            zone,
+            record_type,
+            event,
+            ..
+        } => {
             if !version_ok(v) {
                 return;
             }
             if !cfg.zones.iter().any(|z| z == &zone) {
                 return;
             }
-            if !note_peer_inbound(table, from, cfg.node_id.clone(), cfg.device_pk.clone(), cfg.zones.clone(), false, cfg.rate_limit_per_sec).await {
+            if !note_peer_inbound(
+                table,
+                from,
+                cfg.node_id.clone(),
+                cfg.device_pk.clone(),
+                cfg.zones.clone(),
+                false,
+                cfg.rate_limit_per_sec,
+            )
+            .await
+            {
                 return;
             }
             if let Some(tx) = cfg.inbound_tx.as_ref() {
-                let _ = tx.send(UdpInbound::Record { zone, record_type, event, from });
+                let _ = tx.send(UdpInbound::Record {
+                    zone,
+                    record_type,
+                    event,
+                    from,
+                });
             }
         }
-        UdpMessage::RecordRequest { v, zone, types, .. } => {
+        UdpMessage::RecordRequest {
+            v,
+            zone,
+            types,
+            identity_id,
+            device_pk,
+            hops,
+            ..
+        } => {
             if !version_ok(v) {
                 return;
             }
             if !cfg.zones.iter().any(|z| z == &zone) {
                 return;
             }
-            if !note_peer_inbound(table, from, cfg.node_id.clone(), cfg.device_pk.clone(), cfg.zones.clone(), false, cfg.rate_limit_per_sec).await {
+            if !note_peer_inbound(
+                table,
+                from,
+                cfg.node_id.clone(),
+                cfg.device_pk.clone(),
+                cfg.zones.clone(),
+                false,
+                cfg.rate_limit_per_sec,
+            )
+            .await
+            {
                 return;
             }
             if let Some(tx) = cfg.inbound_tx.as_ref() {
-                let _ = tx.send(UdpInbound::RecordRequest { zone, types, from });
+                let _ = tx.send(UdpInbound::RecordRequest {
+                    zone,
+                    types,
+                    identity_id,
+                    device_pk,
+                    hops,
+                    from,
+                });
             }
         }
     }
 }
 
-
-async fn handle_outbound(socket: &UdpSocket, peers: &Arc<Mutex<Vec<SocketAddr>>>, msg: UdpOutbound, max_packet_bytes: usize) {
+async fn handle_outbound(
+    socket: &UdpSocket,
+    peers: &Arc<Mutex<Vec<SocketAddr>>>,
+    msg: UdpOutbound,
+    max_packet_bytes: usize,
+) {
     match msg {
         UdpOutbound::Broadcast(inner) => {
             let snapshot = { peers.lock().await.clone() };
@@ -420,7 +677,12 @@ async fn handle_outbound(socket: &UdpSocket, peers: &Arc<Mutex<Vec<SocketAddr>>>
     }
 }
 
-async fn send_message(socket: &UdpSocket, addr: SocketAddr, msg: &UdpMessage, max_packet_bytes: usize) {
+async fn send_message(
+    socket: &UdpSocket,
+    addr: SocketAddr,
+    msg: &UdpMessage,
+    max_packet_bytes: usize,
+) {
     if let Ok(payload) = serde_json::to_vec(msg) {
         if payload.len() > max_packet_bytes {
             tracing::debug!(peer = %addr, len = payload.len(), "udp send skipped (too large)");
@@ -609,6 +871,55 @@ fn random_txid() -> [u8; 12] {
 
 fn version_ok(v: u8) -> bool {
     v == UDP_PROTOCOL_VERSION
+}
+
+fn key_bytes(key: &str) -> [u8; 32] {
+    hex_32_bytes(key).unwrap_or_else(|| hash_bytes(key))
+}
+
+fn peer_bytes(pk: &str) -> [u8; 32] {
+    hex_32_bytes(pk).unwrap_or_else(|| hash_bytes(pk))
+}
+
+fn xor_distance(a: &[u8; 32], b: &[u8; 32]) -> [u8; 32] {
+    let mut out = [0u8; 32];
+    for i in 0..32 {
+        out[i] = a[i] ^ b[i];
+    }
+    out
+}
+
+fn hex_32_bytes(hex: &str) -> Option<[u8; 32]> {
+    let h = hex.trim();
+    if h.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    let bytes = h.as_bytes();
+    for i in 0..32 {
+        let hi = from_hex(bytes[i * 2])?;
+        let lo = from_hex(bytes[i * 2 + 1])?;
+        out[i] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn from_hex(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(10 + (b - b'a')),
+        b'A'..=b'F' => Some(10 + (b - b'A')),
+        _ => None,
+    }
+}
+
+fn hash_bytes(input: &str) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    hasher.update(input.as_bytes());
+    let hash = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&hash[..]);
+    out
 }
 
 fn now_ms() -> u64 {

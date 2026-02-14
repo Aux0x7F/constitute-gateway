@@ -20,6 +20,8 @@
   "udp_max_packet_bytes": 2048,
   "udp_rate_limit_per_sec": 60,
   "udp_sync_interval_secs": 90,
+  "udp_request_fanout": 8,
+  "udp_request_max_hops": 2,
   "stun_interval_secs": 30,
   "stun_servers": [
     "stun:stun.l.google.com:19302"
@@ -29,6 +31,8 @@
   "relay_rebroadcast": true,
   "relay_replay_window_secs": 600,
   "relay_replay_skew_secs": 120,
+  "relay_rate_limit_per_sec": 60,
+  "relay_max_frame_bytes": 65536,
   "relay_bind_tls": "",
   "relay_tls_cert_path": "",
   "relay_tls_key_path": ""

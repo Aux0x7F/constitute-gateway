@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
-use secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey};
 use secp256k1::schnorr::Signature;
+use secp256k1::{Keypair, Secp256k1, SecretKey, XOnlyPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -97,8 +97,6 @@ pub fn frame_req(sub_id: &str, filters: Vec<NostrFilter>) -> String {
     serde_json::to_string(&json!(["REQ", sub_id, filters])).unwrap_or_else(|_| "[]".to_string())
 }
 
-
-
 pub fn verify_event(ev: &NostrEvent) -> Result<bool> {
     let unsigned = NostrUnsignedEvent {
         pubkey: ev.pubkey.clone(),
@@ -150,11 +148,13 @@ fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
 }
 
 fn bytes_to_hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{:02x}", b)).collect::<String>()
+    bytes
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 fn xonly_pk_hex(keypair: &Keypair) -> String {
     let (pk, _) = XOnlyPublicKey::from_keypair(keypair);
     bytes_to_hex(&pk.serialize())
 }
-

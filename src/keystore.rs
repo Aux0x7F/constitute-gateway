@@ -137,7 +137,11 @@ pub struct SecureSeed {
 }
 
 fn select_key_source(dir: &Path) -> Result<(KeySource, KeySourceKind)> {
-    if std::env::var("CONSTITUTE_GATEWAY_NO_KEYRING").ok().as_deref() == Some("1") {
+    if std::env::var("CONSTITUTE_GATEWAY_NO_KEYRING")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
         return passphrase_or_file(dir);
     }
 
@@ -214,7 +218,13 @@ impl KeySource {
     }
 }
 
-fn derive_key_from_pass(pass: &str, salt: &[u8], mem_kib: u32, iterations: u32, parallelism: u32) -> Result<Vec<u8>> {
+fn derive_key_from_pass(
+    pass: &str,
+    salt: &[u8],
+    mem_kib: u32,
+    iterations: u32,
+    parallelism: u32,
+) -> Result<Vec<u8>> {
     let mut out = vec![0u8; KEY_BYTES];
     let params = argon2::Params::new(mem_kib, iterations, parallelism, Some(KEY_BYTES))
         .map_err(|_| anyhow!("invalid argon2 params"))?;
@@ -237,7 +247,14 @@ fn encrypt_payload(payload: &StorePayload, key_source: &KeySource) -> Result<Enc
             let iterations = 3;
             let parallelism = 1;
             let key = derive_key_from_pass(pass, &salt, mem_kib, iterations, parallelism)?;
-            (key, "argon2id".to_string(), salt, mem_kib, iterations, parallelism)
+            (
+                key,
+                "argon2id".to_string(),
+                salt,
+                mem_kib,
+                iterations,
+                parallelism,
+            )
         }
     };
 
@@ -282,7 +299,9 @@ fn decrypt_payload(enc: &EncryptedStore, key: &[u8]) -> Result<StorePayload> {
 mod tests {
     use base64::Engine as _;
 
-    use super::{derive_key_from_pass, decrypt_payload, encrypt_payload, KeySource, StorePayload, ZoneEntry};
+    use super::{
+        decrypt_payload, derive_key_from_pass, encrypt_payload, KeySource, StorePayload, ZoneEntry,
+    };
 
     #[test]
     fn encrypt_decrypt_roundtrip() {
@@ -291,7 +310,10 @@ mod tests {
             nostr_sk_hex: "sk".to_string(),
             identity_id: "id".to_string(),
             device_label: "label".to_string(),
-            zones: vec![ZoneEntry { key: "zone".to_string(), name: "Zone".to_string() }],
+            zones: vec![ZoneEntry {
+                key: "zone".to_string(),
+                name: "Zone".to_string(),
+            }],
         };
         let pass = "test-pass".to_string();
         let enc = encrypt_payload(&payload, &KeySource::Passphrase(pass.clone())).expect("encrypt");

@@ -11,7 +11,8 @@ fn discovery_envelope_shape() {
         vec!["wss://relay.example".to_string()],
     );
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
-    let (_metrics_tx, metrics_rx) = tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
+    let (_metrics_tx, metrics_rx) =
+        tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
     let client = constitute_gateway::discovery::DiscoveryClient::new(
         constitute_gateway::relay::RelayPool::empty(),
         record,
@@ -26,13 +27,22 @@ fn discovery_envelope_shape() {
     let v: Value = serde_json::from_str(&json).expect("valid json");
     assert_eq!(v[0], "EVENT");
     let ev = &v[1];
-    assert_eq!(ev["kind"], constitute_gateway::discovery::default_record_kind());
+    assert_eq!(
+        ev["kind"],
+        constitute_gateway::discovery::default_record_kind()
+    );
     assert_eq!(ev["pubkey"], "pubkey");
     assert!(ev["created_at"].is_number());
 
     let tags = ev["tags"].as_array().expect("tags array");
-    let has_record_tag = tags.iter().any(|t| t.get(0) == Some(&Value::String("t".to_string())) && t.get(1) == Some(&Value::String("swarm_discovery".to_string())));
-    let has_type = tags.iter().any(|t| t.get(0) == Some(&Value::String("type".to_string())) && t.get(1) == Some(&Value::String("device".to_string())));
+    let has_record_tag = tags.iter().any(|t| {
+        t.get(0) == Some(&Value::String("t".to_string()))
+            && t.get(1) == Some(&Value::String("swarm_discovery".to_string()))
+    });
+    let has_type = tags.iter().any(|t| {
+        t.get(0) == Some(&Value::String("type".to_string()))
+            && t.get(1) == Some(&Value::String("device".to_string()))
+    });
     assert!(has_record_tag);
     assert!(has_type);
 
@@ -51,7 +61,8 @@ fn zone_presence_envelope_shape() {
         vec!["wss://relay.example".to_string()],
     );
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
-    let (_metrics_tx, metrics_rx) = tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
+    let (_metrics_tx, metrics_rx) =
+        tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
     let client = constitute_gateway::discovery::DiscoveryClient::new(
         constitute_gateway::relay::RelayPool::empty(),
         record,
@@ -68,8 +79,14 @@ fn zone_presence_envelope_shape() {
     let ev = &v[1];
     assert_eq!(ev["kind"], 1);
     let tags = ev["tags"].as_array().expect("tags array");
-    let has_t = tags.iter().any(|t| t.get(0) == Some(&Value::String("t".to_string())) && t.get(1) == Some(&Value::String("constitute".to_string())));
-    let has_z = tags.iter().any(|t| t.get(0) == Some(&Value::String("z".to_string())) && t.get(1) == Some(&Value::String("zonekey".to_string())));
+    let has_t = tags.iter().any(|t| {
+        t.get(0) == Some(&Value::String("t".to_string()))
+            && t.get(1) == Some(&Value::String("constitute".to_string()))
+    });
+    let has_z = tags.iter().any(|t| {
+        t.get(0) == Some(&Value::String("z".to_string()))
+            && t.get(1) == Some(&Value::String("zonekey".to_string()))
+    });
     assert!(has_t);
     assert!(has_z);
     let content = ev["content"].as_str().expect("content");
@@ -122,7 +139,8 @@ async fn udp_handshake_confirms_peer() {
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 2048,
         rate_limit_per_sec: 0,
-        udp_sync_interval_secs: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
         stun_servers: vec![],
         stun_interval: Duration::from_secs(0),
         swarm_endpoint_tx: None,
@@ -137,7 +155,8 @@ async fn udp_handshake_confirms_peer() {
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 2048,
         rate_limit_per_sec: 0,
-        udp_sync_interval_secs: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
         stun_servers: vec![],
         stun_interval: Duration::from_secs(0),
         swarm_endpoint_tx: None,
@@ -163,8 +182,70 @@ async fn udp_handshake_confirms_peer() {
     assert!(count_b >= 1, "expected peer confirmed on B");
 }
 
+#[tokio::test]
+async fn udp_rejects_wrong_version() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
 
+    let cfg_a = constitute_gateway::transport::UdpConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![],
+        handshake_interval: Duration::from_secs(0),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 2048,
+        rate_limit_per_sec: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx_a),
+    };
 
+    let handle_a = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:45300", cfg_a)
+        .await
+        .expect("start udp a");
+
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "device".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "devicePk": pk_a,
+        "identityId": "",
+        "deviceLabel": "",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let ev = constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign");
+
+    let msg = serde_json::json!({
+        "kind": "record",
+        "v": 9,
+        "zone": "zone-a",
+        "record_type": "device",
+        "event": ev,
+        "ts": 1
+    });
+
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let payload = serde_json::to_vec(&msg).expect("json");
+    let _ = sock.send_to(&payload, "127.0.0.1:45300").await;
+
+    let msg = tokio::time::timeout(Duration::from_millis(200), rx_a.recv()).await;
+    assert!(
+        msg.is_err(),
+        "expected no inbound message for wrong version"
+    );
+
+    handle_a.stop();
+}
 
 #[tokio::test]
 async fn udp_record_gossip_zone_scoped() {
@@ -183,7 +264,8 @@ async fn udp_record_gossip_zone_scoped() {
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 2048,
         rate_limit_per_sec: 0,
-        udp_sync_interval_secs: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
         stun_servers: vec![],
         stun_interval: Duration::from_secs(0),
         swarm_endpoint_tx: None,
@@ -199,7 +281,8 @@ async fn udp_record_gossip_zone_scoped() {
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 2048,
         rate_limit_per_sec: 0,
-        udp_sync_interval_secs: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
         stun_servers: vec![],
         stun_interval: Duration::from_secs(0),
         swarm_endpoint_tx: None,
@@ -215,7 +298,10 @@ async fn udp_record_gossip_zone_scoped() {
 
     tokio::time::sleep(Duration::from_secs(1)).await;
 
-    let tags = vec![vec!["t".to_string(), "swarm_discovery".to_string()], vec!["type".to_string(), "device".to_string()]];
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "device".to_string()],
+    ];
     let payload = serde_json::json!({
         "devicePk": pk_a,
         "identityId": "",
@@ -223,7 +309,8 @@ async fn udp_record_gossip_zone_scoped() {
         "updatedAt": 1,
         "expiresAt": 999999999999u64,
     });
-    let unsigned = constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
     let ev = constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign");
 
     handle_a.broadcast_record("zone-a", "device", ev);
@@ -234,7 +321,9 @@ async fn udp_record_gossip_zone_scoped() {
         .unwrap();
 
     match msg {
-        constitute_gateway::transport::UdpInbound::Record { zone, record_type, .. } => {
+        constitute_gateway::transport::UdpInbound::Record {
+            zone, record_type, ..
+        } => {
             assert_eq!(zone, "zone-a");
             assert_eq!(record_type, "device");
         }
@@ -242,7 +331,255 @@ async fn udp_record_gossip_zone_scoped() {
     }
 
     // ensure zone mismatch is ignored
-    handle_a.broadcast_record("zone-b", "device", constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign"));
+    handle_a.broadcast_record(
+        "zone-b",
+        "device",
+        constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign"),
+    );
     let msg = tokio::time::timeout(Duration::from_millis(500), rx_b.recv()).await;
     assert!(msg.is_err(), "expected no message for wrong zone");
+}
+
+#[tokio::test]
+async fn udp_record_request_by_identity() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = tmp.local_addr().unwrap();
+    drop(tmp);
+    let bind = addr.to_string();
+
+    let cfg = constitute_gateway::transport::UdpConfig {
+        node_id: "node-a".to_string(),
+        device_pk: "pk-a".to_string(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![],
+        handshake_interval: Duration::from_secs(0),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 2048,
+        rate_limit_per_sec: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx),
+    };
+
+    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+        .await
+        .expect("start udp");
+
+    let msg = serde_json::json!({
+        "kind": "recordrequest",
+        "v": 1,
+        "zone": "zone-a",
+        "types": ["identity"],
+        "identity_id": "id-42",
+        "ts": 1
+    });
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let payload = serde_json::to_vec(&msg).unwrap();
+    sock.send_to(&payload, &bind).await.unwrap();
+
+    let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    match inbound {
+        constitute_gateway::transport::UdpInbound::RecordRequest {
+            identity_id,
+            device_pk,
+            ..
+        } => {
+            assert_eq!(identity_id.as_deref(), Some("id-42"));
+            assert!(device_pk.is_none());
+        }
+        _ => panic!("unexpected inbound variant"),
+    }
+
+    handle.stop();
+}
+
+#[tokio::test]
+async fn udp_record_request_by_device() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr = tmp.local_addr().unwrap();
+    drop(tmp);
+    let bind = addr.to_string();
+
+    let cfg = constitute_gateway::transport::UdpConfig {
+        node_id: "node-b".to_string(),
+        device_pk: "pk-b".to_string(),
+        zones: vec!["zone-b".to_string()],
+        peers: vec![],
+        handshake_interval: Duration::from_secs(0),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 2048,
+        rate_limit_per_sec: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx),
+    };
+
+    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+        .await
+        .expect("start udp");
+
+    let msg = serde_json::json!({
+        "kind": "recordrequest",
+        "v": 1,
+        "zone": "zone-b",
+        "types": ["device"],
+        "device_pk": "pk-42",
+        "ts": 1
+    });
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let payload = serde_json::to_vec(&msg).unwrap();
+    sock.send_to(&payload, &bind).await.unwrap();
+
+    let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+
+    match inbound {
+        constitute_gateway::transport::UdpInbound::RecordRequest {
+            device_pk,
+            identity_id,
+            ..
+        } => {
+            assert_eq!(device_pk.as_deref(), Some("pk-42"));
+            assert!(identity_id.is_none());
+        }
+        _ => panic!("unexpected inbound variant"),
+    }
+
+    handle.stop();
+}
+
+#[tokio::test]
+async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();
+
+    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_a = tmp_a.local_addr().unwrap();
+    drop(tmp_a);
+    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = tmp_b.local_addr().unwrap();
+    drop(tmp_b);
+
+    let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
+    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+
+    let cfg_a = constitute_gateway::transport::UdpConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_b.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx_a),
+    };
+
+    let cfg_b = constitute_gateway::transport::UdpConfig {
+        node_id: "node-b".to_string(),
+        device_pk: pk_b,
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_a.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx_b),
+    };
+
+    let handle_a = constitute_gateway::transport::start_udp_with_handle(&addr_a.to_string(), cfg_a)
+        .await
+        .expect("start udp a");
+    let handle_b = constitute_gateway::transport::start_udp_with_handle(&addr_b.to_string(), cfg_b)
+        .await
+        .expect("start udp b");
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let identity_id = "identity-req-1";
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "identity".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "identityId": identity_id,
+        "identityLabel": "node-a",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let identity_event =
+        constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign identity");
+
+    handle_b
+        .request_identity_record("zone-a", identity_id)
+        .await;
+
+    let inbound_req = tokio::time::timeout(Duration::from_secs(2), rx_a.recv())
+        .await
+        .expect("request timeout")
+        .expect("request missing");
+
+    let from = match inbound_req {
+        constitute_gateway::transport::UdpInbound::RecordRequest {
+            from,
+            identity_id: got,
+            ..
+        } => {
+            assert_eq!(got.as_deref(), Some(identity_id));
+            from
+        }
+        _ => panic!("expected record request"),
+    };
+
+    handle_a.send_record_to(from, "zone-a", "identity", identity_event.clone());
+
+    let inbound_resp = tokio::time::timeout(Duration::from_secs(2), rx_b.recv())
+        .await
+        .expect("response timeout")
+        .expect("response missing");
+
+    match inbound_resp {
+        constitute_gateway::transport::UdpInbound::Record {
+            zone,
+            record_type,
+            event,
+            ..
+        } => {
+            assert_eq!(zone, "zone-a");
+            assert_eq!(record_type, "identity");
+            assert_eq!(event.id, identity_event.id);
+        }
+        _ => panic!("expected record response"),
+    }
+
+    handle_a.stop();
+    handle_b.stop();
 }
