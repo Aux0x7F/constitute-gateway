@@ -5,6 +5,9 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   snap:
     runs-on: ubuntu-latest
@@ -39,9 +42,27 @@ jobs:
       - name: Download NSSM
         shell: pwsh
         run: |
-          $url = 'https://nssm.cc/release/nssm-2.24.zip'
-          Invoke-WebRequest -Uri $url -OutFile nssm.zip
-          Expand-Archive nssm.zip -DestinationPath nssm
+          $urls = @(
+            'https://nssm.cc/release/nssm-2.24.zip',
+            'https://www.nssm.cc/release/nssm-2.24.zip',
+            'https://github.com/kohsuke/nssm/releases/download/v2.24/nssm-2.24.zip'
+          )
+          $downloaded = $false
+          foreach ($url in $urls) {
+            for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile nssm.zip
+                $downloaded = $true
+              } catch {
+                Start-Sleep -Seconds (2 * $attempt)
+              }
+            }
+            if ($downloaded) { break }
+          }
+          if (-not $downloaded) {
+            throw 'Failed to download NSSM from all configured mirrors'
+          }
+          Expand-Archive nssm.zip -DestinationPath nssm -Force
 
       - name: Package ZIP
         shell: pwsh
