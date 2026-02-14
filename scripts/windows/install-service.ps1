@@ -57,6 +57,13 @@ if (-not (Test-Path $NssmPath)) {
     throw "nssm.exe not found at $NssmPath"
 }
 
+function Invoke-Nssm([string[]]$Args) {
+    & $NssmPath @Args
+    if ($LASTEXITCODE -ne 0) {
+        throw "nssm failed (exit $LASTEXITCODE): $($Args -join ' ')"
+    }
+}
+
 if (-not (Test-Path $bin)) {
     Write-Host "Binary not found; building release..."
     if (-not (Build-Release '')) {
@@ -98,9 +105,10 @@ if (-not (Test-Path $zoneSeed)) {
     }
 }
 
-& $NssmPath install $ServiceName $bin
-& $NssmPath set $ServiceName AppDirectory $repo
-& $NssmPath set $ServiceName AppParameters "--config $config"
-& $NssmPath set $ServiceName Start SERVICE_DELAYED_AUTO_START
-& $NssmPath start $ServiceName
+Invoke-Nssm @('install', $ServiceName, $bin)
+Invoke-Nssm @('set', $ServiceName, 'AppDirectory', $repo)
+Invoke-Nssm @('set', $ServiceName, 'AppParameters', "--config $config")
+Invoke-Nssm @('set', $ServiceName, 'Start', 'SERVICE_DELAYED_AUTO_START')
+Invoke-Nssm @('start', $ServiceName)
+
 Write-Host "Service installed and started: $ServiceName (delayed auto-start)"

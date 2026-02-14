@@ -41,31 +41,6 @@ jobs:
       - name: Build (Windows)
         run: cargo build --release --features platform-windows
 
-      - name: Download NSSM
-        shell: pwsh
-        run: |
-          $urls = @(
-            'https://nssm.cc/release/nssm-2.24.zip',
-            'https://www.nssm.cc/release/nssm-2.24.zip',
-            'https://github.com/kohsuke/nssm/releases/download/v2.24/nssm-2.24.zip'
-          )
-          $downloaded = $false
-          foreach ($url in $urls) {
-            for ($attempt = 1; $attempt -le 3 -and -not $downloaded; $attempt++) {
-              try {
-                Invoke-WebRequest -Uri $url -OutFile nssm.zip
-                $downloaded = $true
-              } catch {
-                Start-Sleep -Seconds (2 * $attempt)
-              }
-            }
-            if ($downloaded) { break }
-          }
-          if (-not $downloaded) {
-            throw 'Failed to download NSSM from all configured mirrors'
-          }
-          Expand-Archive nssm.zip -DestinationPath nssm -Force
-
       - name: Package ZIP
         shell: pwsh
         run: |
@@ -73,8 +48,6 @@ jobs:
           Copy-Item target\release\constitute-gateway.exe dist\constitute-gateway.exe
           Copy-Item config.example.json dist\config.json
           Copy-Item README.md dist\README.md
-          New-Item -ItemType Directory -Force -Path dist\nssm | Out-Null
-          Copy-Item nssm\nssm-2.24\win64\nssm.exe dist\nssm\nssm.exe
           Copy-Item -Recurse -Force scripts dist\scripts
           Compress-Archive -Path dist\* -DestinationPath constitute-gateway-windows.zip
 
@@ -83,4 +56,3 @@ jobs:
         with:
           name: constitute-gateway-windows
           path: constitute-gateway-windows.zip
-
