@@ -2,6 +2,8 @@
 
 This document defines the Fedora CoreOS deployment path for `constitute-gateway`.
 
+Roadmap context: [`docs/ROADMAP.md`](ROADMAP.md).
+
 ## Goals
 - Immutable host baseline
 - Network-gated first boot

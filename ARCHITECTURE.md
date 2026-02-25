@@ -2,6 +2,8 @@
 
 This document captures the gateway architecture, convergence requirements with the web repo, and the current roadmap.
 
+Roadmap brief companion: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+
 ## Purpose
 The gateway is a native dependency that enables browser clients to bootstrap discovery, bridge into swarm transport, and consume DHT-backed primitives. It is not a parallel product surface.
 
@@ -13,6 +15,7 @@ Required convergence points:
 - Signed NIP-01 events
 - Discovery record schema (`kind=30078`, `t=swarm_discovery`, `type=device`)
 - Zone presence envelope (`kind=1`, `t=constitute`, `z=<zone>`, `type=zone_presence`)
+- Shared role vocabulary (`relay|gateway|browser|native`)
 
 ## Core Responsibilities
 1. Discovery bootstrap via Nostr relays
@@ -38,11 +41,11 @@ Key storage:
 ## Discovery and Presence Contracts
 ### Swarm Discovery Record
 - `kind`: `30078`
-- Tags: `['t','swarm_discovery']`, `['type','device']`
+- Tags: `['t','swarm_discovery']`, `['type','device']`, `['role','<role>']`
 - Content fields include:
   - `devicePk`, optional `identityId`, optional `deviceLabel`
   - `updatedAt`, `expiresAt`
-  - `role` (`gateway`)
+  - `role` (`relay|gateway|browser|native`; runtime defaults to `gateway` but is configurable)
   - `relays`
   - `serviceVersion`
 
@@ -110,6 +113,11 @@ Planned hardening:
 - Stronger host config update verification path
 
 ## Roadmap
+Execution order:
+1. Finish gateway contract freeze and parity gaps in this repository.
+2. Converge web implementation against frozen contracts.
+3. Build service-layer repos (starting with `constitute-nvr`) on top of the converged base.
+
 ### Phase 0: Bootstrap Parity
 - [x] Nostr keypair generation and signed events
 - [x] Zone presence and discovery schema alignment
@@ -141,8 +149,8 @@ Planned hardening:
 ## Documentation Surface
 - `README.md`
 - `docs/PROTOCOL.md`
+- `docs/ROADMAP.md`
 - `docs/OPERATIONS.md`
 - `docs/DEVELOPMENT.md`
 - `docs/FCOS.md`
 - `infra/fcos/README.md`
-

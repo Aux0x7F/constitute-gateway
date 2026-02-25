@@ -56,8 +56,10 @@ struct ZoneConfig {
 struct Config {
     #[serde(default)]
     node_id: String,
+    #[serde(default = "default_node_role")]
+    node_role: String,
     #[serde(default)]
-    node_type: Option<discovery::NodeType>,
+    node_type: Option<String>,
     #[serde(default = "default_bind")]
     bind: String,
     #[serde(default = "default_data_dir")]
@@ -155,8 +157,35 @@ fn default_data_dir() -> String {
     platform::default_data_dir()
 }
 
-fn default_node_type() -> discovery::NodeType {
-    discovery::NodeType::Gateway
+fn default_node_role() -> String {
+    discovery::NodeType::Gateway.to_string()
+}
+
+fn normalize_node_role(value: &str) -> Option<String> {
+    let role = value.trim().to_ascii_lowercase();
+    if role.is_empty() {
+        return None;
+    }
+    if role
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+    {
+        Some(role)
+    } else {
+        None
+    }
+}
+
+fn resolve_node_role(cfg: &Config) -> String {
+    if let Some(role) = normalize_node_role(&cfg.node_role) {
+        return role;
+    }
+    if let Some(legacy) = cfg.node_type.as_deref() {
+        if let Some(role) = normalize_node_role(legacy) {
+            return role;
+        }
+    }
+    default_node_role()
 }
 
 fn default_nostr_kind() -> u32 {
@@ -348,6 +377,15 @@ async fn main() -> Result<()> {
         dirty = true;
     }
 
+    let node_role = resolve_node_role(&cfg);
+    if normalize_node_role(&cfg.node_role).is_none() {
+        if !cfg.node_role.trim().is_empty() {
+            warn!(node_role = %cfg.node_role, "invalid node_role; using fallback");
+        }
+        cfg.node_role = node_role.clone();
+        dirty = true;
+    }
+
     // Persist only non-sensitive operational config; keystore owns secret material.
     if dirty {
         // Do not persist secure fields into config.json for safety.
@@ -362,7 +400,6 @@ async fn main() -> Result<()> {
         warn!("nostr_relays empty; discovery bootstrap disabled (placeholder)");
     }
 
-    let node_type = cfg.node_type.clone().unwrap_or_else(default_node_type);
     let advertise_relays = if cfg.advertise_relays.is_empty() {
         cfg.nostr_relays.clone()
     } else {
@@ -375,7 +412,7 @@ async fn main() -> Result<()> {
     info!(
         bind = %cfg.bind,
         data_dir = %cfg.data_dir,
-        node_type = %node_type,
+        node_role = %node_role,
         zones = cfg.zones.len(),
         "gateway starting (skeleton)"
     );
@@ -404,6 +441,7 @@ async fn main() -> Result<()> {
                     &cfg.nostr_sk_hex,
                     cfg.nostr_kind,
                     &cfg.nostr_tag,
+                    &node_role,
                     Duration::from_secs(timeout_secs),
                 )
                 .await
@@ -440,7 +478,7 @@ async fn main() -> Result<()> {
         &device_pk,
         &identity_id,
         &device_label,
-        "gateway",
+        &node_role,
         advertise_relays.clone(),
     );
 
@@ -1250,6 +1288,7 @@ async fn run_self_test(
     sk_hex: &str,
     kind: u32,
     tag: &str,
+    role: &str,
     timeout_duration: Duration,
 ) -> Result<bool> {
     let (ws, _) = connect_async(relay_url).await?;
@@ -1258,7 +1297,7 @@ async fn run_self_test(
     let content = format!("selftest:{}", nonce);
     let tags = vec![
         vec!["t".to_string(), tag.to_string()],
-        vec!["type".to_string(), "gateway".to_string()],
+        vec!["type".to_string(), role.to_string()],
         vec!["selftest".to_string(), nonce],
     ];
     let unsigned =
@@ -2313,6 +2352,29 @@ mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
     use serde_json::json;
+
+    #[test]
+    fn node_role_prefers_explicit_role() {
+        let mut cfg = Config::default();
+        cfg.node_role = "native_ingest".to_string();
+        cfg.node_type = Some("gateway".to_string());
+        assert_eq!(resolve_node_role(&cfg), "native_ingest");
+    }
+
+    #[test]
+    fn node_role_uses_legacy_node_type_when_role_missing() {
+        let mut cfg = Config::default();
+        cfg.node_type = Some("browser".to_string());
+        assert_eq!(resolve_node_role(&cfg), "browser");
+    }
+
+    #[test]
+    fn node_role_defaults_to_gateway_for_invalid_inputs() {
+        let mut cfg = Config::default();
+        cfg.node_role = "".to_string();
+        cfg.node_type = Some("bad role!".to_string());
+        assert_eq!(resolve_node_role(&cfg), "gateway");
+    }
 
     #[tokio::test]
     async fn web_bridge_swarm_discovery_request() {

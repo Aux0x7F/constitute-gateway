@@ -7,11 +7,14 @@ This folder is the primary documentation surface for `constitute-gateway`.
 - FCOS operators: [`docs/FCOS.md`](FCOS.md)
 - Contributors: [`docs/DEVELOPMENT.md`](DEVELOPMENT.md)
 - Protocol implementers: [`docs/PROTOCOL.md`](PROTOCOL.md)
-- Architecture and roadmap: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
+- Program roadmap brief: [`docs/ROADMAP.md`](ROADMAP.md)
+- Architecture and long-form roadmap: [`ARCHITECTURE.md`](../ARCHITECTURE.md)
 
 ## Document Roles
 - [`docs/PROTOCOL.md`](PROTOCOL.md)
-  - Discovery tags, event envelopes, DHT read/write semantics, and compatibility constraints.
+  - Wire contracts, validation rules, app-channel and UDP message semantics.
+- [`docs/ROADMAP.md`](ROADMAP.md)
+  - Project-wide sequencing: gateway -> web convergence -> service layer (`constitute-nvr`).
 - [`docs/OPERATIONS.md`](OPERATIONS.md)
   - Runtime operations, install/update flows, hardening, and verification checks.
 - [`docs/FCOS.md`](FCOS.md)

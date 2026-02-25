@@ -81,9 +81,21 @@ Baseline guidance:
 - Keep default logging minimal.
 - Apply CPU quotas and restart policies for stability.
 
+## Role Configuration
+- `node_role` is the primary runtime role config key (default: `gateway`).
+- Legacy `node_type` is accepted for backward compatibility.
+- Role values are normalized to lowercase and must be ASCII `[a-z0-9_-]`.
+
 ## Verification Checklist
 - Service is installed and active (or intentionally stopped).
 - Gateway self-test passes relay publication/check.
 - Expected peer discovery occurs for joined zones.
 - Default logs do not expose sensitive values.
 - Update timer health is valid when enabled.
+
+## Convergence Readiness Checks
+Before switching primary work to web convergence:
+- Gateway contract is current in [`docs/PROTOCOL.md`](PROTOCOL.md).
+- Runtime behavior matches `ARCHITECTURE.md` phase status.
+- CI passes on both Linux and Windows build/test lanes.
+- Open gateway P0/P1 blockers are explicitly tracked.

@@ -5,6 +5,12 @@
 - `cargo` for build and test
 - PowerShell and Bash scripts under `scripts/`
 
+## Source of Truth Order
+When making protocol/runtime changes, treat documents in this order:
+1. `docs/PROTOCOL.md` (wire contract)
+2. `ARCHITECTURE.md` and `docs/ROADMAP.md` (phase intent and sequencing)
+3. implementation + tests
+
 ## Local Build
 ### Direct cargo
 ```bash
@@ -22,6 +28,7 @@ Build actions are grouped under the `Build` menu in both runners.
 ```bash
 cargo test --features platform-windows -j 1
 cargo test --features platform-linux -j 1
+cargo test
 ```
 
 ## Formatting
@@ -59,6 +66,12 @@ Optional PowerShell parser check:
 ```powershell
 [void][System.Management.Automation.Language.Parser]::ParseFile('.\scripts\run.ps1',[ref]$null,[ref]$null)
 ```
+
+## Contract-First Change Pattern
+1. Propose the contract change in `docs/PROTOCOL.md`.
+2. Add tests for accept/reject behavior.
+3. Implement runtime change.
+4. Update `ARCHITECTURE.md`, `docs/ROADMAP.md`, and ops docs if behavior or deployment changed.
 
 ## Change Expectations
 - Add or update tests when behavior changes.

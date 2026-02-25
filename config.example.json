@@ -1,4 +1,5 @@
 {
+  "node_role": "gateway",
   "bind": "0.0.0.0:4040",
   "data_dir": "./data",
   "nostr_relays": [
