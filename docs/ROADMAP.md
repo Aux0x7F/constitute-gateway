@@ -13,7 +13,7 @@ Rationale:
 - Service-layer work (NVR and similar) should consume stable primitives, not redefine them.
 
 ## Current Snapshot
-- Gateway: core discovery, app-channel bridge, and zone-scoped UDP/DHT path implemented.
+- Gateway: core discovery, app-channel bridge, zone-scoped UDP/DHT path, and optional QUIC mesh path implemented.
 - Web convergence: partial; parity work remains.
 - NVR: not started in this repository (future sibling service repository).
 
@@ -73,8 +73,8 @@ Gateway iteration-1 is considered handoff-ready for web catch-up when the follow
 - role publication model is extensible and backward compatible
 
 Current disposition:
-- Ready to start web catch-up on `constitute` issue #2.
-- Longer-running operator host validation (real deployment environment soak checks) is tracked as a separate follow-up and does not block web catch-up.
+- Not yet handoff-ready for web catch-up; transport/fallback and auth-boundary closure remains active under gateway blocker issue #1.
+- Longer-running operator host validation (real deployment environment soak checks) remains tracked as follow-up issue #7.
 
 ## Estimation Guidance
 To account for offline human intervals and review latency:

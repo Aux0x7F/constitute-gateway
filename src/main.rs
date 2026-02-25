@@ -16,6 +16,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::Arc;
@@ -98,6 +99,12 @@ struct Config {
     udp_request_fanout: u32,
     #[serde(default = "default_udp_request_max_hops")]
     udp_request_max_hops: u8,
+    #[serde(default)]
+    quic_enabled: bool,
+    #[serde(default = "default_quic_bind")]
+    quic_bind: String,
+    #[serde(default)]
+    quic_peers: Vec<String>,
     #[serde(default = "default_stun_interval_secs")]
     stun_interval_secs: u64,
     #[serde(default)]
@@ -238,6 +245,10 @@ fn default_udp_request_fanout() -> u32 {
 
 fn default_udp_request_max_hops() -> u8 {
     2
+}
+
+fn default_quic_bind() -> String {
+    "0.0.0.0:4041".to_string()
 }
 
 fn default_stun_interval_secs() -> u64 {
@@ -584,6 +595,7 @@ async fn main() -> Result<()> {
     }
 
     let bind = cfg.bind.clone();
+    let udp_in_tx_for_quic = udp_in_tx.clone();
     let udp_cfg = transport::UdpConfig {
         node_id: cfg.node_id.clone(),
         device_pk: cfg.nostr_pubkey.clone(),
@@ -601,6 +613,40 @@ async fn main() -> Result<()> {
         inbound_tx: Some(udp_in_tx),
     };
     let udp_handle = Arc::new(transport::start_udp_with_handle(&bind, udp_cfg).await?);
+
+    let quic_handle = if cfg.quic_enabled {
+        let quic_bind = cfg.quic_bind.clone();
+        let quic_peers = if cfg.quic_peers.is_empty() {
+            cfg.udp_peers.clone()
+        } else {
+            cfg.quic_peers.clone()
+        };
+        let quic_cfg = transport::QuicConfig {
+            node_id: cfg.node_id.clone(),
+            device_pk: cfg.nostr_pubkey.clone(),
+            zones: zones.clone(),
+            peers: quic_peers,
+            handshake_interval: Duration::from_secs(cfg.udp_handshake_interval_secs.max(1)),
+            peer_timeout: Duration::from_secs(cfg.udp_peer_timeout_secs.max(10)),
+            max_packet_bytes: cfg.udp_max_packet_bytes.max(512).min(65507) as usize,
+            rate_limit_per_sec: cfg.udp_rate_limit_per_sec,
+            request_fanout: cfg.udp_request_fanout as usize,
+            request_max_hops: cfg.udp_request_max_hops,
+            inbound_tx: Some(udp_in_tx_for_quic),
+        };
+        match transport::start_quic_with_handle(&quic_bind, quic_cfg).await {
+            Ok(handle) => {
+                info!(bind = %quic_bind, "quic listener ready");
+                Some(Arc::new(handle))
+            }
+            Err(err) => {
+                warn!(error = %err, "quic listener failed to start; continuing with udp transport only");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     let seen_cache = Arc::new(Mutex::new(SeenCache::new()));
     let peer_set = Arc::new(Mutex::new(
@@ -661,6 +707,7 @@ async fn main() -> Result<()> {
         local_relay: local_relay.clone(),
         store: store.clone(),
         udp_handle: udp_handle.clone(),
+        quic_handle: quic_handle.clone(),
         zones: zones.clone(),
         zone_keys: zone_keys.clone(),
         peer_set: peer_set.clone(),
@@ -689,11 +736,18 @@ async fn main() -> Result<()> {
     });
 
     for zone in &zones {
-        udp_handle.request_records(zone, vec!["identity".to_string(), "device".to_string()]);
+        mesh_request_records(
+            &udp_handle,
+            quic_handle.as_ref(),
+            zone,
+            vec!["identity".to_string(), "device".to_string()],
+        )
+        .await;
     }
 
     let store_for_udp = store.clone();
     let udp_handle_for_udp = udp_handle.clone();
+    let quic_handle_for_udp = quic_handle.clone();
     let local_relay_for_udp = local_relay.clone();
     let relay_pool_for_udp = relay_pool.clone();
     let pending_for_udp = pending.clone();
@@ -766,13 +820,27 @@ async fn main() -> Result<()> {
                     if let Some(id) = identity_id.as_ref() {
                         if want_identity {
                             if let Some(record) = guard.get_identity_event_zone(&zone, id) {
-                                udp_handle_for_udp.send_record_to(from, &zone, "identity", record);
+                                mesh_send_record_to(
+                                    &udp_handle_for_udp,
+                                    quic_handle_for_udp.as_ref(),
+                                    from,
+                                    &zone,
+                                    "identity",
+                                    record,
+                                );
                                 served_identity = true;
                             }
                         }
                     } else if want_identity {
                         for record in guard.list_identity_events_zone(&zone) {
-                            udp_handle_for_udp.send_record_to(from, &zone, "identity", record);
+                            mesh_send_record_to(
+                                &udp_handle_for_udp,
+                                quic_handle_for_udp.as_ref(),
+                                from,
+                                &zone,
+                                "identity",
+                                record,
+                            );
                             served_identity = true;
                         }
                     }
@@ -780,13 +848,27 @@ async fn main() -> Result<()> {
                     if let Some(pk) = device_pk.as_ref() {
                         if want_device {
                             if let Some(record) = guard.get_device_event_zone(&zone, pk) {
-                                udp_handle_for_udp.send_record_to(from, &zone, "device", record);
+                                mesh_send_record_to(
+                                    &udp_handle_for_udp,
+                                    quic_handle_for_udp.as_ref(),
+                                    from,
+                                    &zone,
+                                    "device",
+                                    record,
+                                );
                                 served_device = true;
                             }
                         }
                     } else if want_device {
                         for record in guard.list_device_events_zone(&zone) {
-                            udp_handle_for_udp.send_record_to(from, &zone, "device", record);
+                            mesh_send_record_to(
+                                &udp_handle_for_udp,
+                                quic_handle_for_udp.as_ref(),
+                                from,
+                                &zone,
+                                "device",
+                                record,
+                            );
                             served_device = true;
                         }
                     }
@@ -794,12 +876,26 @@ async fn main() -> Result<()> {
                     if want_dht {
                         if let (Some(scope), Some(key)) = (dht_scope.as_ref(), dht_key.as_ref()) {
                             if let Some(record) = guard.get_dht_event_zone(&zone, scope, key) {
-                                udp_handle_for_udp.send_record_to(from, &zone, "dht", record);
+                                mesh_send_record_to(
+                                    &udp_handle_for_udp,
+                                    quic_handle_for_udp.as_ref(),
+                                    from,
+                                    &zone,
+                                    "dht",
+                                    record,
+                                );
                                 served_dht = true;
                             }
                         } else {
                             for record in guard.list_dht_events_zone(&zone) {
-                                udp_handle_for_udp.send_record_to(from, &zone, "dht", record);
+                                mesh_send_record_to(
+                                    &udp_handle_for_udp,
+                                    quic_handle_for_udp.as_ref(),
+                                    from,
+                                    &zone,
+                                    "dht",
+                                    record,
+                                );
                                 served_dht = true;
                             }
                         }
@@ -813,18 +909,19 @@ async fn main() -> Result<()> {
                             && dht_key.as_ref().map(|k| !k.is_empty()).unwrap_or(false));
                     if need_forward {
                         let next_hops = hops.saturating_add(1);
-                        udp_handle_for_udp
-                            .forward_record_request(
-                                &zone,
-                                types.clone(),
-                                identity_id.clone(),
-                                device_pk.clone(),
-                                dht_scope.clone(),
-                                dht_key.clone(),
-                                next_hops,
-                                Some(from),
-                            )
-                            .await;
+                        mesh_forward_record_request(
+                            &udp_handle_for_udp,
+                            quic_handle_for_udp.as_ref(),
+                            &zone,
+                            types.clone(),
+                            identity_id.clone(),
+                            device_pk.clone(),
+                            dht_scope.clone(),
+                            dht_key.clone(),
+                            next_hops,
+                            Some(from),
+                        )
+                        .await;
                     }
                 }
             }
@@ -833,26 +930,23 @@ async fn main() -> Result<()> {
 
     let sync_interval = Duration::from_secs(cfg.udp_sync_interval_secs.max(30));
     let udp_handle_for_sync = udp_handle.clone();
+    let quic_handle_for_sync = quic_handle.clone();
     let zones_for_sync = zones.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(sync_interval);
         loop {
             ticker.tick().await;
             for zone in &zones_for_sync {
-                udp_handle_for_sync
-                    .request_records(zone, vec!["identity".to_string(), "device".to_string()]);
+                mesh_request_records(
+                    &udp_handle_for_sync,
+                    quic_handle_for_sync.as_ref(),
+                    zone,
+                    vec!["identity".to_string(), "device".to_string()],
+                )
+                .await;
             }
         }
     });
-
-    tokio::spawn(async move {
-        if let Err(err) = transport::start_quic_stub().await {
-            tracing::warn!(error = %err, "quic stub failed");
-        }
-    });
-
-    // TODO: discovery bootstrap (nostr) and relay service
-    // TODO: auth/envelope verification
 
     tokio::signal::ctrl_c().await?;
     info!("shutdown");
@@ -1433,6 +1527,7 @@ struct InboundContext {
     local_relay: Option<local_relay::LocalRelayHandle>,
     store: Arc<Mutex<SwarmStoreMap>>,
     udp_handle: Arc<transport::UdpHandle>,
+    quic_handle: Option<Arc<transport::QuicHandle>>,
     zones: Vec<String>,
     zone_keys: HashSet<String>,
     peer_set: Arc<Mutex<HashSet<String>>>,
@@ -1446,6 +1541,132 @@ struct InboundContext {
 enum InboundSource {
     Nostr,
     Local,
+}
+
+fn mesh_broadcast_record(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    record_type: &str,
+    event: nostr::NostrEvent,
+) {
+    udp.broadcast_record(zone, record_type, event.clone());
+    if let Some(handle) = quic {
+        handle.broadcast_record(zone, record_type, event);
+    }
+}
+
+fn mesh_send_record_to(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    addr: SocketAddr,
+    zone: &str,
+    record_type: &str,
+    event: nostr::NostrEvent,
+) {
+    udp.send_record_to(addr, zone, record_type, event.clone());
+    if let Some(handle) = quic {
+        handle.send_record_to(addr, zone, record_type, event);
+    }
+}
+
+async fn mesh_request_records(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    types: Vec<String>,
+) {
+    udp.request_records(zone, types.clone());
+    if let Some(handle) = quic {
+        handle.request_records(zone, types);
+    }
+}
+
+async fn mesh_request_identity_record(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    identity_id: &str,
+) {
+    udp.request_identity_record(zone, identity_id).await;
+    if let Some(handle) = quic {
+        handle.request_identity_record(zone, identity_id).await;
+    }
+}
+
+async fn mesh_request_device_record(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    device_pk: &str,
+) {
+    udp.request_device_record(zone, device_pk).await;
+    if let Some(handle) = quic {
+        handle.request_device_record(zone, device_pk).await;
+    }
+}
+
+async fn mesh_request_dht_record(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    scope: &str,
+    key: &str,
+) {
+    udp.request_dht_record(zone, scope, key).await;
+    if let Some(handle) = quic {
+        handle.request_dht_record(zone, scope, key).await;
+    }
+}
+
+async fn mesh_forward_record_request(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    zone: &str,
+    types: Vec<String>,
+    identity_id: Option<String>,
+    device_pk: Option<String>,
+    dht_scope: Option<String>,
+    dht_key: Option<String>,
+    hops: u8,
+    exclude: Option<SocketAddr>,
+) {
+    udp.forward_record_request(
+        zone,
+        types.clone(),
+        identity_id.clone(),
+        device_pk.clone(),
+        dht_scope.clone(),
+        dht_key.clone(),
+        hops,
+        exclude,
+    )
+    .await;
+    if let Some(handle) = quic {
+        handle
+            .forward_record_request(
+                zone,
+                types,
+                identity_id,
+                device_pk,
+                dht_scope,
+                dht_key,
+                hops,
+                exclude,
+            )
+            .await;
+    }
+}
+
+async fn mesh_set_peers(
+    udp: &Arc<transport::UdpHandle>,
+    quic: Option<&Arc<transport::QuicHandle>>,
+    addrs: Vec<SocketAddr>,
+) {
+    udp.set_peers(addrs.clone()).await;
+    if let Some(handle) = quic {
+        handle.set_peers(addrs).await;
+    }
 }
 
 #[derive(Default)]
@@ -1527,8 +1748,13 @@ async fn process_inbound_event(
         guard.put_record_all(&ctx.zones, &nostr_ev)
     } {
         for zone in &ctx.zones {
-            ctx.udp_handle
-                .broadcast_record(zone, record_type.as_str(), nostr_ev.clone());
+            mesh_broadcast_record(
+                &ctx.udp_handle,
+                ctx.quic_handle.as_ref(),
+                zone,
+                record_type.as_str(),
+                nostr_ev.clone(),
+            );
         }
         if let Some(local) = ctx.local_relay.as_ref() {
             if let Ok(app_ev) =
@@ -1567,7 +1793,9 @@ async fn process_inbound_event(
                     guard.put_record_all(&ctx.zones, &record_ev)
                 } {
                     for zone in &ctx.zones {
-                        ctx.udp_handle.broadcast_record(
+                        mesh_broadcast_record(
+                            &ctx.udp_handle,
+                            ctx.quic_handle.as_ref(),
                             zone,
                             record_type.as_str(),
                             record_ev.clone(),
@@ -1855,12 +2083,22 @@ async fn process_inbound_event(
                 };
                 for z in zones_to_query {
                     if need_identity {
-                        ctx.udp_handle
-                            .request_identity_record(&z, identity_id)
-                            .await;
+                        mesh_request_identity_record(
+                            &ctx.udp_handle,
+                            ctx.quic_handle.as_ref(),
+                            &z,
+                            identity_id,
+                        )
+                        .await;
                     }
                     if need_device {
-                        ctx.udp_handle.request_device_record(&z, device_pk).await;
+                        mesh_request_device_record(
+                            &ctx.udp_handle,
+                            ctx.quic_handle.as_ref(),
+                            &z,
+                            device_pk,
+                        )
+                        .await;
                     }
                 }
 
@@ -1946,7 +2184,13 @@ async fn process_inbound_event(
                 }
 
                 for z in &zones_to_write {
-                    ctx.udp_handle.broadcast_record(z, "dht", record_ev.clone());
+                    mesh_broadcast_record(
+                        &ctx.udp_handle,
+                        ctx.quic_handle.as_ref(),
+                        z,
+                        "dht",
+                        record_ev.clone(),
+                    );
                 }
 
                 let _ = publish_record_app_event_with_request(
@@ -2112,9 +2356,14 @@ async fn process_inbound_event(
                 }
 
                 for z in zones_to_query {
-                    ctx.udp_handle
-                        .request_dht_record(&z, &dht_scope, &dht_key)
-                        .await;
+                    mesh_request_dht_record(
+                        &ctx.udp_handle,
+                        ctx.quic_handle.as_ref(),
+                        &z,
+                        &dht_scope,
+                        &dht_key,
+                    )
+                    .await;
                 }
             }
         }
@@ -2133,10 +2382,15 @@ async fn process_inbound_event(
         if inserted {
             all.sort();
             let addrs = transport::resolve_peers(&all).await;
-            ctx.udp_handle.set_peers(addrs).await;
+            mesh_set_peers(&ctx.udp_handle, ctx.quic_handle.as_ref(), addrs).await;
             for zone in &ctx.zones {
-                ctx.udp_handle
-                    .request_records(zone, vec!["identity".to_string(), "device".to_string()]);
+                mesh_request_records(
+                    &ctx.udp_handle,
+                    ctx.quic_handle.as_ref(),
+                    zone,
+                    vec!["identity".to_string(), "device".to_string()],
+                )
+                .await;
             }
             tracing::info!(endpoint = %endpoint, "udp peer discovered from zone presence");
         }
@@ -2469,6 +2723,7 @@ mod tests {
             local_relay: Some(local_relay.clone()),
             store: store.clone(),
             udp_handle: udp_handle.clone(),
+            quic_handle: None,
             zones: zones.clone(),
             zone_keys,
             peer_set: Arc::new(Mutex::new(HashSet::new())),
@@ -2646,6 +2901,7 @@ mod tests {
             local_relay: Some(local_relay.clone()),
             store: store.clone(),
             udp_handle: udp_handle.clone(),
+            quic_handle: None,
             zones: zones.clone(),
             zone_keys,
             peer_set: Arc::new(Mutex::new(HashSet::new())),
@@ -2780,6 +3036,7 @@ mod tests {
             local_relay: Some(local_relay.clone()),
             store: store.clone(),
             udp_handle: udp_handle.clone(),
+            quic_handle: None,
             zones: zones.clone(),
             zone_keys,
             peer_set: Arc::new(Mutex::new(HashSet::new())),

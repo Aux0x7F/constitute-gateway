@@ -645,3 +645,313 @@ async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
     handle_a.stop();
     handle_b.stop();
 }
+
+#[tokio::test]
+async fn udp_rejects_record_with_invalid_signature() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+    let cfg = constitute_gateway::transport::UdpConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![],
+        handshake_interval: Duration::from_secs(0),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 2048,
+        rate_limit_per_sec: 0,
+        request_fanout: 0,
+        request_max_hops: 0,
+        stun_servers: vec![],
+        stun_interval: Duration::from_secs(0),
+        swarm_endpoint_tx: None,
+        inbound_tx: Some(tx),
+    };
+
+    let handle = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:45420", cfg)
+        .await
+        .expect("start udp");
+
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "device".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "devicePk": pk_a,
+        "identityId": "",
+        "deviceLabel": "",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let mut ev = constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign");
+    ev.content = "{\"tampered\":true}".to_string();
+
+    let msg = serde_json::json!({
+        "kind": "record",
+        "v": 1,
+        "zone": "zone-a",
+        "record_type": "device",
+        "event": ev,
+        "ts": 1
+    });
+
+    let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let payload = serde_json::to_vec(&msg).unwrap();
+    sock.send_to(&payload, "127.0.0.1:45420").await.unwrap();
+
+    let recv = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
+    assert!(
+        recv.is_err(),
+        "expected invalid-signature record to be rejected"
+    );
+
+    handle.stop();
+}
+
+#[tokio::test]
+async fn quic_rejects_record_with_invalid_signature() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();
+
+    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_a = tmp_a.local_addr().unwrap();
+    drop(tmp_a);
+    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = tmp_b.local_addr().unwrap();
+    drop(tmp_b);
+
+    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+
+    let cfg_a = constitute_gateway::transport::QuicConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_b.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: None,
+    };
+
+    let cfg_b = constitute_gateway::transport::QuicConfig {
+        node_id: "node-b".to_string(),
+        device_pk: pk_b,
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_a.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: Some(tx_b),
+    };
+
+    let handle_a =
+        constitute_gateway::transport::start_quic_with_handle(&addr_a.to_string(), cfg_a)
+            .await
+            .expect("start quic a");
+    let handle_b =
+        constitute_gateway::transport::start_quic_with_handle(&addr_b.to_string(), cfg_b)
+            .await
+            .expect("start quic b");
+
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            if handle_a.confirmed_count().await >= 1 && handle_b.confirmed_count().await >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("quic handshake timeout");
+
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "device".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "devicePk": pk_a,
+        "identityId": "",
+        "deviceLabel": "",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let mut ev = constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign");
+    ev.content = "{\"tampered\":true}".to_string();
+
+    handle_a.broadcast_record("zone-a", "device", ev);
+
+    let recv = tokio::time::timeout(Duration::from_millis(400), rx_b.recv()).await;
+    assert!(
+        recv.is_err(),
+        "expected invalid-signature record to be rejected"
+    );
+
+    handle_a.stop();
+    handle_b.stop();
+}
+
+#[tokio::test]
+async fn quic_handshake_confirms_peer() {
+    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_a = tmp_a.local_addr().unwrap();
+    drop(tmp_a);
+    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = tmp_b.local_addr().unwrap();
+    drop(tmp_b);
+
+    let cfg_a = constitute_gateway::transport::QuicConfig {
+        node_id: "node-a".to_string(),
+        device_pk: "pk-a".to_string(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_b.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: None,
+    };
+
+    let cfg_b = constitute_gateway::transport::QuicConfig {
+        node_id: "node-b".to_string(),
+        device_pk: "pk-b".to_string(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_a.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: None,
+    };
+
+    let handle_a =
+        constitute_gateway::transport::start_quic_with_handle(&addr_a.to_string(), cfg_a)
+            .await
+            .expect("start quic a");
+    let handle_b =
+        constitute_gateway::transport::start_quic_with_handle(&addr_b.to_string(), cfg_b)
+            .await
+            .expect("start quic b");
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    let count_a = handle_a.confirmed_count().await;
+    let count_b = handle_b.confirmed_count().await;
+
+    handle_a.stop();
+    handle_b.stop();
+
+    assert!(count_a >= 1, "expected peer confirmed on A");
+    assert!(count_b >= 1, "expected peer confirmed on B");
+}
+
+#[tokio::test]
+async fn quic_record_gossip_zone_scoped() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();
+
+    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_a = tmp_a.local_addr().unwrap();
+    drop(tmp_a);
+    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = tmp_b.local_addr().unwrap();
+    drop(tmp_b);
+
+    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+
+    let cfg_a = constitute_gateway::transport::QuicConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_b.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: None,
+    };
+
+    let cfg_b = constitute_gateway::transport::QuicConfig {
+        node_id: "node-b".to_string(),
+        device_pk: pk_b,
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_a.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: Some(tx_b),
+    };
+
+    let handle_a =
+        constitute_gateway::transport::start_quic_with_handle(&addr_a.to_string(), cfg_a)
+            .await
+            .expect("start quic a");
+    let handle_b =
+        constitute_gateway::transport::start_quic_with_handle(&addr_b.to_string(), cfg_b)
+            .await
+            .expect("start quic b");
+
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            if handle_a.confirmed_count().await >= 1 && handle_b.confirmed_count().await >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("quic handshake timeout");
+
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "device".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "devicePk": pk_a,
+        "identityId": "",
+        "deviceLabel": "",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let ev = constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign");
+
+    handle_a.broadcast_record("zone-a", "device", ev);
+
+    let inbound = tokio::time::timeout(Duration::from_secs(2), rx_b.recv())
+        .await
+        .expect("receive timeout")
+        .expect("missing message");
+
+    match inbound {
+        constitute_gateway::transport::UdpInbound::Record {
+            zone, record_type, ..
+        } => {
+            assert_eq!(zone, "zone-a");
+            assert_eq!(record_type, "device");
+        }
+        _ => panic!("unexpected inbound variant"),
+    }
+
+    handle_a.stop();
+    handle_b.stop();
+}

@@ -22,7 +22,7 @@ Required convergence points:
 2. Zone-scoped presence and peer discovery
 3. Local gateway relay for browser peers (WS/WSS)
 4. Swarm record storage for identity/device/DHT records
-5. UDP handshake + request forwarding across native peers
+5. UDP + QUIC handshake and request forwarding across native peers
 6. External endpoint publication for swarm advertisement
 
 ## Identity and Key Management
@@ -126,9 +126,9 @@ Execution order:
 - [x] Basic metrics publication
 
 ### Phase 1: Swarm Transport
-- [ ] Stable mesh transport under difficult NAT topologies
-- [ ] Relay fallback strategy (`nostr -> gateway -> direct`)
-- [ ] TURN/gateway role boundaries
+- [~] Stable mesh transport baseline (`udp + optional quic`)
+- [~] Relay fallback strategy (`udp <-> quic` dual-send + graceful degrade)
+- [~] TURN/gateway role boundaries documented (browser TURN remains client-side fallback)
 
 ### Phase 2: Host and Service Hardening
 - [x] FCOS first-boot bootstrap scaffold

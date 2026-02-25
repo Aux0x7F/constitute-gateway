@@ -110,10 +110,19 @@ Fields:
 - Required: `scope` or `dhtScope`, `key` or `dhtKey`, `value`
 - Optional: `zone`, `updatedAt`, `expiresAt`, `requestId`
 
-## Gateway <-> Gateway UDP Transport
+## Gateway <-> Gateway Mesh Transport
+
+### Transport Modes
+- UDP mesh (default)
+- QUIC datagram mesh (optional, enabled with `quic_enabled`)
+
+Runtime behavior:
+- Gateway always runs UDP transport.
+- When QUIC is enabled, gateway runs QUIC in parallel and uses dual-send fanout for record propagation and lookups.
+- Failures on one transport do not block the other transport path.
 
 ### Message Envelope
-- Transport: UDP
+- Shared envelope across UDP and QUIC datagrams
 - Version field: `v`
 - Current version: `1`
 - Unknown versions: drop silently
@@ -133,6 +142,11 @@ Fields:
 - Forwarding bounds:
   - max peers per request: `udp_request_fanout`
   - max forwarding depth: `udp_request_max_hops`
+
+### TURN / Gateway Boundary
+- Gateway does not terminate TURN sessions.
+- TURN remains a browser/client fallback path when direct browser connectivity is required.
+- Gateway mesh transport (UDP/QUIC) is the native backbone plane.
 
 ## Validation and Security Invariants
 
@@ -157,6 +171,7 @@ Record acceptance requires:
 
 ### Replay/Loop Boundaries
 - Event-id replay cache is enforced for inbound processing.
+- Mesh transport drops invalid-signature `record` envelopes before they enter request/store flows.
 - Rebroadcast excludes events authored by self.
 - Allowed relay fanout classes are constrained to `t=constitute` or `t=swarm_discovery`.
 

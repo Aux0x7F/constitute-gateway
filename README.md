@@ -5,7 +5,7 @@ Native gateway service for Constitute. This repository provides the native depen
 ## Scope
 - Nostr-based discovery bootstrap and zone presence publication
 - Gateway local relay surface for web clients
-- Zone-scoped UDP transport and DHT-style request/response primitives
+- Zone-scoped UDP/QUIC mesh transport and DHT-style request/response primitives
 - Host bootstrap automation for Linux, Windows, and FCOS paths
 
 Out of scope:
@@ -18,10 +18,11 @@ Implemented:
 - Discovery and zone presence contracts
 - Gateway record query and DHT put/get bridge
 - UDP forwarding fanout and hop bounds
+- Optional QUIC datagram transport path with local integration tests
 - FCOS provisioning scaffolding
 
 In progress:
-- Transport hardening for difficult NAT topologies
+- Transport hardening and operational tuning for difficult NAT topologies
 - Web parity for full convergence on identity/device resolution behavior
 
 ## Opinionated Release Deploy (One-Liners)
