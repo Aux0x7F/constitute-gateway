@@ -1,6 +1,6 @@
 # Constitute Gateway
 
-Native gateway service for Constitute. This repository provides the native layer that browser clients depend on for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
+Native gateway service for Constitute. This repository provides the native dependency layer that browser clients and native services depend on for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
 
 ## Scope
 - Nostr-based discovery bootstrap and zone presence publication
@@ -11,13 +11,18 @@ Native gateway service for Constitute. This repository provides the native layer
 Out of scope:
 - Web UI and UX
 - Community policy UX
-- Higher-layer application crypto semantics
+- Service-specific application logic (for example NVR ingest/retention)
 
 ## Status
-- Discovery and zone presence contracts: implemented
-- Gateway record query and DHT put/get bridge: implemented
-- UDP forwarding fanout and hop bounds: implemented
-- FCOS provisioning scaffolding: implemented
+Implemented:
+- Discovery and zone presence contracts
+- Gateway record query and DHT put/get bridge
+- UDP forwarding fanout and hop bounds
+- FCOS provisioning scaffolding
+
+In progress:
+- Transport hardening for difficult NAT topologies
+- Web parity for full convergence on identity/device resolution behavior
 
 ## Opinionated Release Deploy (One-Liners)
 ### Linux (install/update, production update timer, baseline host hardening)
@@ -35,7 +40,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubus
 - FCOS operators: [`docs/FCOS.md`](docs/FCOS.md)
 - Contributors: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - Protocol contracts: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-- Architecture and roadmap: [`ARCHITECTURE.md`](ARCHITECTURE.md)
+- Project roadmap brief: [`docs/ROADMAP.md`](docs/ROADMAP.md)
+- Architecture and detailed roadmap: [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ## Runner Entrypoints
 - Linux/FCOS: `./scripts/run.sh`
@@ -49,4 +55,3 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubus
 
 ## Contributing
 Contribution standards and commit conventions are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
