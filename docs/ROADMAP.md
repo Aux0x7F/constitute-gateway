@@ -73,12 +73,13 @@ Gateway iteration-1 is considered handoff-ready for web catch-up when the follow
 - role publication model is extensible and backward compatible
 
 Current disposition:
-- Not yet handoff-ready for web catch-up; transport/fallback and auth-boundary closure remains active under gateway blocker issue #1.
-- Longer-running operator host validation (real deployment environment soak checks) remains tracked as follow-up issue #7.
+- Handoff-ready for web catch-up once PR #12 is merged; transport/fallback/auth-boundary blocker slices (#9/#10/#11) are implemented and test-backed.
+- Longer-running operator host validation (real deployment environment soak checks) remains tracked as non-blocking follow-up issue #7.
 
 ## Estimation Guidance
 To account for offline human intervals and review latency:
 - apply a 1.5x to 2.0x calendar buffer to implementation estimates
 - split work into issue-sized slices that each close within 1-3 focused sessions
 - prefer milestone-level target dates over single-day deadlines for integration-heavy phases
+
 

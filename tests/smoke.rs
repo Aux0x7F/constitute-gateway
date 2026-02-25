@@ -955,3 +955,127 @@ async fn quic_record_gossip_zone_scoped() {
     handle_a.stop();
     handle_b.stop();
 }
+#[tokio::test]
+async fn quic_targeted_identity_request_roundtrip_between_two_peers() {
+    let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
+    let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();
+
+    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_a = tmp_a.local_addr().unwrap();
+    drop(tmp_a);
+    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let addr_b = tmp_b.local_addr().unwrap();
+    drop(tmp_b);
+
+    let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
+    let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
+
+    let cfg_a = constitute_gateway::transport::QuicConfig {
+        node_id: "node-a".to_string(),
+        device_pk: pk_a.clone(),
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_b.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: Some(tx_a),
+    };
+
+    let cfg_b = constitute_gateway::transport::QuicConfig {
+        node_id: "node-b".to_string(),
+        device_pk: pk_b,
+        zones: vec!["zone-a".to_string()],
+        peers: vec![addr_a.to_string()],
+        handshake_interval: Duration::from_secs(1),
+        peer_timeout: Duration::from_secs(10),
+        max_packet_bytes: 4096,
+        rate_limit_per_sec: 0,
+        request_fanout: 2,
+        request_max_hops: 2,
+        inbound_tx: Some(tx_b),
+    };
+
+    let handle_a =
+        constitute_gateway::transport::start_quic_with_handle(&addr_a.to_string(), cfg_a)
+            .await
+            .expect("start quic a");
+    let handle_b =
+        constitute_gateway::transport::start_quic_with_handle(&addr_b.to_string(), cfg_b)
+            .await
+            .expect("start quic b");
+
+    tokio::time::timeout(Duration::from_secs(6), async {
+        loop {
+            if handle_a.confirmed_count().await >= 1 && handle_b.confirmed_count().await >= 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("quic handshake timeout");
+
+    let identity_id = "identity-req-quic-1";
+    let tags = vec![
+        vec!["t".to_string(), "swarm_discovery".to_string()],
+        vec!["type".to_string(), "identity".to_string()],
+    ];
+    let payload = serde_json::json!({
+        "identityId": identity_id,
+        "identityLabel": "node-a",
+        "updatedAt": 1,
+        "expiresAt": 999999999999u64,
+    });
+    let unsigned =
+        constitute_gateway::nostr::build_unsigned_event(&pk_a, 30078, tags, payload.to_string(), 1);
+    let identity_event =
+        constitute_gateway::nostr::sign_event(&unsigned, &sk_a).expect("sign identity");
+
+    handle_b
+        .request_identity_record("zone-a", identity_id)
+        .await;
+
+    let inbound_req = tokio::time::timeout(Duration::from_secs(2), rx_a.recv())
+        .await
+        .expect("request timeout")
+        .expect("request missing");
+
+    let from = match inbound_req {
+        constitute_gateway::transport::UdpInbound::RecordRequest {
+            from,
+            identity_id: got,
+            ..
+        } => {
+            assert_eq!(got.as_deref(), Some(identity_id));
+            from
+        }
+        _ => panic!("expected record request"),
+    };
+
+    handle_a.send_record_to(from, "zone-a", "identity", identity_event.clone());
+
+    let inbound_resp = tokio::time::timeout(Duration::from_secs(2), rx_b.recv())
+        .await
+        .expect("response timeout")
+        .expect("response missing");
+
+    match inbound_resp {
+        constitute_gateway::transport::UdpInbound::Record {
+            zone,
+            record_type,
+            event,
+            ..
+        } => {
+            assert_eq!(zone, "zone-a");
+            assert_eq!(record_type, "identity");
+            assert_eq!(event.id, identity_event.id);
+        }
+        _ => panic!("expected record response"),
+    }
+
+    handle_a.stop();
+    handle_b.stop();
+}

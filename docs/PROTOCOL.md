@@ -176,7 +176,7 @@ Record acceptance requires:
 - Allowed relay fanout classes are constrained to `t=constitute` or `t=swarm_discovery`.
 
 ## Convergence Targets (Gateway -> Web)
-The following are intended to be completed before broad web convergence work:
+The following are executed during web convergence to validate parity; gateway-side transport/fallback/auth baselines are complete for iteration-1:
 - exact signaling envelope parity for swarm signaling messages
 - parity for identity/device resolution behavior and fallback order
 - parity for zone membership durability and sync semantics

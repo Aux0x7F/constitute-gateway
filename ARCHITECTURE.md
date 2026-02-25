@@ -126,9 +126,9 @@ Execution order:
 - [x] Basic metrics publication
 
 ### Phase 1: Swarm Transport
-- [~] Stable mesh transport baseline (`udp + optional quic`)
-- [~] Relay fallback strategy (`udp <-> quic` dual-send + graceful degrade)
-- [~] TURN/gateway role boundaries documented (browser TURN remains client-side fallback)
+- [x] Stable mesh transport baseline (`udp + optional quic`)
+- [x] Relay fallback strategy (`udp <-> quic` dual-send + graceful degrade)
+- [x] TURN/gateway role boundaries documented (browser TURN remains client-side fallback)
 
 ### Phase 2: Host and Service Hardening
 - [x] FCOS first-boot bootstrap scaffold
