@@ -1519,7 +1519,7 @@ const MESH_SIGNAL_RECORD_TYPE: &str = "signal";
 fn is_mesh_passthrough_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "pair_request" | "pair_approve" | "pair_reject" | "pair_resolved" | "swarm_signal"
+        "pair_claim" | "pair_request" | "pair_approve" | "pair_reject" | "pair_resolved" | "swarm_signal"
     )
 }
 
@@ -2728,6 +2728,7 @@ mod tests {
 
     #[test]
     fn mesh_passthrough_kinds_are_whitelisted() {
+        assert!(is_mesh_passthrough_kind("pair_claim"));
         assert!(is_mesh_passthrough_kind("pair_request"));
         assert!(is_mesh_passthrough_kind("pair_approve"));
         assert!(is_mesh_passthrough_kind("pair_reject"));
