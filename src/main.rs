@@ -754,6 +754,7 @@ async fn main() -> Result<()> {
     let self_pk_udp = cfg.nostr_pubkey.clone();
     let self_sk_udp = cfg.nostr_sk_hex.clone();
     let zones_for_udp = zones.clone();
+    let ctx_udp = inbound_ctx.clone();
     tokio::spawn(async move {
         while let Some(msg) = udp_in_rx.recv().await {
             match msg {
@@ -764,6 +765,18 @@ async fn main() -> Result<()> {
                     from,
                 } => {
                     if !zones_for_udp.contains(&zone) {
+                        continue;
+                    }
+                    if record_type == MESH_SIGNAL_RECORD_TYPE {
+                        if let Ok(val) = serde_json::to_value(&event) {
+                            process_inbound_event(
+                                val,
+                                Some(nostr::frame_event(&event)),
+                                InboundSource::Mesh,
+                                ctx_udp.clone(),
+                            )
+                            .await;
+                        }
                         continue;
                     }
                     let stored = {
@@ -1501,6 +1514,77 @@ fn is_allowed_event(ev: &Value) -> bool {
     event_has_tag(ev, "t", "constitute") || event_has_tag(ev, "t", "swarm_discovery")
 }
 
+const MESH_SIGNAL_RECORD_TYPE: &str = "signal";
+
+fn is_mesh_passthrough_kind(kind: &str) -> bool {
+    matches!(
+        kind,
+        "pair_request" | "pair_approve" | "pair_reject" | "pair_resolved" | "swarm_signal"
+    )
+}
+
+fn event_zone_tags(ev: &nostr::NostrEvent, zone_keys: &HashSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    for tag in &ev.tags {
+        if tag.get(0).map(|v| v.as_str()) != Some("z") {
+            continue;
+        }
+        let z = tag.get(1).map(|v| v.trim()).unwrap_or("");
+        if z.is_empty() {
+            continue;
+        }
+        if !zone_keys.contains(z) {
+            continue;
+        }
+        let z = z.to_string();
+        if !out.contains(&z) {
+            out.push(z);
+        }
+    }
+    out
+}
+
+fn payload_zone_tags(payload: &Value, zone_keys: &HashSet<String>) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(zone) = payload.get("zone").and_then(|v| v.as_str()) {
+        let z = zone.trim();
+        if !z.is_empty() && zone_keys.contains(z) {
+            out.push(z.to_string());
+        }
+    }
+    if let Some(zones) = payload.get("zones").and_then(|v| v.as_array()) {
+        for zone in zones {
+            let z = zone.as_str().unwrap_or("").trim();
+            if z.is_empty() || !zone_keys.contains(z) {
+                continue;
+            }
+            let z = z.to_string();
+            if !out.contains(&z) {
+                out.push(z);
+            }
+        }
+    }
+    out
+}
+
+fn event_mesh_zones(
+    ev: &nostr::NostrEvent,
+    payload: Option<&Value>,
+    zones: &[String],
+    zone_keys: &HashSet<String>,
+) -> Vec<String> {
+    let mut out = event_zone_tags(ev, zone_keys);
+    if out.is_empty() {
+        if let Some(p) = payload {
+            out = payload_zone_tags(p, zone_keys);
+        }
+    }
+    if out.is_empty() {
+        out = zones.to_vec();
+    }
+    out
+}
+
 #[derive(Clone, Debug)]
 struct PendingRequest {
     zone: Option<String>,
@@ -1541,6 +1625,7 @@ struct InboundContext {
 enum InboundSource {
     Nostr,
     Local,
+    Mesh,
 }
 
 fn mesh_broadcast_record(
@@ -1728,7 +1813,7 @@ async fn process_inbound_event(
 
     // Relay fanout only for app/discovery-tagged events; preserve source separation.
     if is_allowed_event(&ev) {
-        if matches!(source, InboundSource::Nostr) {
+        if !matches!(source, InboundSource::Local) {
             if let Some(local) = ctx.local_relay.as_ref() {
                 local.publish_event(ev.clone()).await;
             }
@@ -1780,6 +1865,17 @@ async fn process_inbound_event(
 
     if let Some(payload) = parse_app_payload(&nostr_ev) {
         let kind = payload.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if is_mesh_passthrough_kind(kind) && !matches!(source, InboundSource::Mesh) {
+            for zone in event_mesh_zones(&nostr_ev, Some(&payload), &ctx.zones, &ctx.zone_keys) {
+                mesh_broadcast_record(
+                    &ctx.udp_handle,
+                    ctx.quic_handle.as_ref(),
+                    &zone,
+                    MESH_SIGNAL_RECORD_TYPE,
+                    nostr_ev.clone(),
+                );
+            }
+        }
         if (kind == "swarm_identity_record"
             || kind == "swarm_device_record"
             || kind == "swarm_dht_record")
@@ -2628,6 +2724,58 @@ mod tests {
         cfg.node_role = "".to_string();
         cfg.node_type = Some("bad role!".to_string());
         assert_eq!(resolve_node_role(&cfg), "gateway");
+    }
+
+    #[test]
+    fn mesh_passthrough_kinds_are_whitelisted() {
+        assert!(is_mesh_passthrough_kind("pair_request"));
+        assert!(is_mesh_passthrough_kind("pair_approve"));
+        assert!(is_mesh_passthrough_kind("pair_reject"));
+        assert!(is_mesh_passthrough_kind("pair_resolved"));
+        assert!(is_mesh_passthrough_kind("swarm_signal"));
+        assert!(!is_mesh_passthrough_kind("zone_list"));
+    }
+
+    #[test]
+    fn event_mesh_zones_uses_tag_scope_then_fallback() {
+        let mut zone_keys = HashSet::new();
+        zone_keys.insert("zone-a".to_string());
+        zone_keys.insert("zone-b".to_string());
+
+        let unsigned = nostr::build_unsigned_event(
+            "pk",
+            1,
+            vec![
+                vec!["t".to_string(), "constitute".to_string()],
+                vec!["z".to_string(), "zone-b".to_string()],
+            ],
+            json!({"type":"pair_request"}).to_string(),
+            util::now_unix_seconds(),
+        );
+        let ev = nostr::NostrEvent {
+            id: "id".to_string(),
+            pubkey: "pk".to_string(),
+            created_at: unsigned.created_at,
+            kind: unsigned.kind,
+            tags: unsigned.tags,
+            content: unsigned.content,
+            sig: "sig".to_string(),
+        };
+
+        let tagged = event_mesh_zones(&ev, None, &["zone-a".to_string()], &zone_keys);
+        assert_eq!(tagged, vec!["zone-b".to_string()]);
+
+        let no_tags = nostr::NostrEvent {
+            tags: vec![vec!["t".to_string(), "constitute".to_string()]],
+            ..ev
+        };
+        let fallback = event_mesh_zones(
+            &no_tags,
+            Some(&json!({"type":"pair_request"})),
+            &["zone-a".to_string()],
+            &zone_keys,
+        );
+        assert_eq!(fallback, vec!["zone-a".to_string()]);
     }
 
     #[tokio::test]
