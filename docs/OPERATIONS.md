@@ -86,6 +86,19 @@ Baseline guidance:
 - Legacy `node_type` is accepted for backward compatibility.
 - Role values are normalized to lowercase and must be ASCII `[a-z0-9_-]`.
 
+## Mesh Transport Configuration
+- UDP is always enabled via `bind` + `udp_*` settings.
+- Optional QUIC mesh is enabled with:
+  - `quic_enabled`
+  - `quic_bind`
+  - `quic_peers` (defaults to `udp_peers` when empty)
+- Runtime uses dual-send fallback when QUIC is enabled (UDP + QUIC fanout).
+- If QUIC startup fails, gateway continues on UDP and logs a warning.
+
+## TURN Boundary
+- Gateway does not host TURN.
+- TURN remains an operator/client concern for browser-side connectivity fallback.
+
 ## Verification Checklist
 - Service is installed and active (or intentionally stopped).
 - Gateway self-test passes relay publication/check.
