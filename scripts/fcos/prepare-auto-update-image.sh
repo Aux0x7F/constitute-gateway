@@ -149,13 +149,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --timer-interval)
       TIMER_INTERVAL="${2:?missing value for --timer-interval}"
-      DEV_POLL=0
-DEV_SOURCE=0
-DEV_SOURCE_BRANCH="main"
-DEV_SOURCE_DIR=""
-PAIR_IDENTITY=""
-PAIR_CODE=""
-PAIR_CODE_HASH=""
       shift 2
       ;;
     --dev-poll)
