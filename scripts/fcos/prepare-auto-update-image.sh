@@ -7,6 +7,12 @@ STREAM="${STREAM:-stable}"
 ARCH="${ARCH:-x86_64}"
 TIMER_INTERVAL="${TIMER_INTERVAL:-30m}"
 DEV_POLL=0
+DEV_SOURCE=0
+DEV_SOURCE_BRANCH="main"
+DEV_SOURCE_DIR=""
+PAIR_IDENTITY=""
+PAIR_CODE=""
+PAIR_CODE_HASH=""
 DOWNLOAD_DIR="${DOWNLOAD_DIR:-$PWD/constitute-gateway-fcos}"
 SSH_KEY_FILE=""
 DEVICE=""
@@ -27,6 +33,12 @@ Options:
   --ssh-key-file <path>           SSH public key for FCOS core user
   --timer-interval <value>        Gateway update timer interval (default: 30m)
   --dev-poll                      Development polling profile (2m)
+  --dev-source                    Build gateway from source branch on host
+  --dev-branch <name>             Branch for --dev-source (default: main)
+  --dev-source-dir <path>         Source checkout path on host (optional)
+  --pair-identity <label>         Pairing identity label for first boot enrollment
+  --pair-code <code>              Pairing code for first boot enrollment
+  --pair-code-hash <hash>         Pairing code hash override
   --device <path>                 Optional direct write target (destructive)
   -h, --help                      Show help
 
@@ -138,11 +150,43 @@ while [[ $# -gt 0 ]]; do
     --timer-interval)
       TIMER_INTERVAL="${2:?missing value for --timer-interval}"
       DEV_POLL=0
+DEV_SOURCE=0
+DEV_SOURCE_BRANCH="main"
+DEV_SOURCE_DIR=""
+PAIR_IDENTITY=""
+PAIR_CODE=""
+PAIR_CODE_HASH=""
       shift 2
       ;;
     --dev-poll)
       DEV_POLL=1
       shift
+      ;;
+    --dev-source)
+      DEV_SOURCE=1
+      shift
+      ;;
+    --dev-branch)
+      DEV_SOURCE=1
+      DEV_SOURCE_BRANCH="${2:?missing value for --dev-branch}"
+      shift 2
+      ;;
+    --dev-source-dir)
+      DEV_SOURCE=1
+      DEV_SOURCE_DIR="${2:?missing value for --dev-source-dir}"
+      shift 2
+      ;;
+    --pair-identity)
+      PAIR_IDENTITY="${2:?missing value for --pair-identity}"
+      shift 2
+      ;;
+    --pair-code)
+      PAIR_CODE="${2:?missing value for --pair-code}"
+      shift 2
+      ;;
+    --pair-code-hash)
+      PAIR_CODE_HASH="${2:?missing value for --pair-code-hash}"
+      shift 2
       ;;
     --device)
       DEVICE="${2:?missing value for --device}"
@@ -192,6 +236,21 @@ if [[ "$DEV_POLL" -eq 1 ]]; then
   render_args+=(--dev-poll)
 else
   render_args+=(--timer-interval "$TIMER_INTERVAL")
+fi
+if [[ "$DEV_SOURCE" -eq 1 ]]; then
+  render_args+=(--dev-source --dev-branch "$DEV_SOURCE_BRANCH")
+  if [[ -n "$DEV_SOURCE_DIR" ]]; then
+    render_args+=(--dev-source-dir "$DEV_SOURCE_DIR")
+  fi
+fi
+if [[ -n "$PAIR_IDENTITY" ]]; then
+  render_args+=(--pair-identity "$PAIR_IDENTITY")
+fi
+if [[ -n "$PAIR_CODE" ]]; then
+  render_args+=(--pair-code "$PAIR_CODE")
+fi
+if [[ -n "$PAIR_CODE_HASH" ]]; then
+  render_args+=(--pair-code-hash "$PAIR_CODE_HASH")
 fi
 
 echo "[prep] rendering ignition config"

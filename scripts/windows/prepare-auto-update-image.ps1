@@ -9,6 +9,12 @@ param(
     [string]$SshKeyPath = '',
     [string]$TimerInterval = '30m',
     [switch]$DevPoll,
+    [switch]$DevSource,
+    [string]$DevBranch = 'main',
+    [string]$DevSourceDir = '',
+    [string]$PairIdentity = '',
+    [string]$PairCode = '',
+    [string]$PairCodeHash = '',
     [string]$Device = ''
 )
 
@@ -46,6 +52,26 @@ if ($DevPoll) {
     $args += '--dev-poll'
 } else {
     $args += @('--timer-interval', $TimerInterval)
+}
+
+if ($DevSource) {
+    $args += '--dev-source'
+    if (-not [string]::IsNullOrWhiteSpace($DevBranch)) {
+        $args += @('--dev-branch', $DevBranch)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DevSourceDir)) {
+        $args += @('--dev-source-dir', $DevSourceDir)
+    }
+}
+
+if (-not [string]::IsNullOrWhiteSpace($PairIdentity)) {
+    $args += @('--pair-identity', $PairIdentity)
+}
+if (-not [string]::IsNullOrWhiteSpace($PairCode)) {
+    $args += @('--pair-code', $PairCode)
+}
+if (-not [string]::IsNullOrWhiteSpace($PairCodeHash)) {
+    $args += @('--pair-code-hash', $PairCodeHash)
 }
 
 if (-not [string]::IsNullOrWhiteSpace($SshKeyPath)) {
@@ -86,4 +112,3 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "FCOS auto-update image prep complete. Output: $resolvedOutDir"
-

@@ -7,6 +7,12 @@ NETWORK_CHECK_URL="${NETWORK_CHECK_URL:-https://github.com}"
 NETWORK_TIMEOUT_SECS="${NETWORK_TIMEOUT_SECS:-300}"
 TIMER_INTERVAL="${TIMER_INTERVAL:-30m}"
 DEV_POLL=0
+DEV_SOURCE=0
+DEV_SOURCE_BRANCH="main"
+DEV_SOURCE_DIR=""
+PAIR_IDENTITY=""
+PAIR_CODE=""
+PAIR_CODE_HASH=""
 SETUP_TIMER=1
 SKIP_HARDENING=0
 UDP_PORT="${UDP_PORT:-}"
@@ -31,6 +37,12 @@ Options:
   --network-timeout-secs <secs>   Max wait for network before failing (default: 300)
   --timer-interval <value>        Auto-update timer interval (default: 30m)
   --dev-poll                      Development polling profile (2m)
+  --dev-source                    Install/update gateway from source branch
+  --dev-branch <name>             Branch for --dev-source (default: main)
+  --dev-source-dir <path>         Source checkout path on host (optional)
+  --pair-identity <label>         Pairing identity label for first boot enrollment
+  --pair-code <code>              Pairing code for first boot enrollment
+  --pair-code-hash <hash>         Pairing code hash override
   --no-timer                      Skip timer setup
   --skip-hardening                Skip hardening script execution
   --udp-port <port>               UDP port to allow when hardening
@@ -159,6 +171,32 @@ while [[ $# -gt 0 ]]; do
       DEV_POLL=1
       shift
       ;;
+    --dev-source)
+      DEV_SOURCE=1
+      shift
+      ;;
+    --dev-branch)
+      DEV_SOURCE=1
+      DEV_SOURCE_BRANCH="${2:?missing value for --dev-branch}"
+      shift 2
+      ;;
+    --dev-source-dir)
+      DEV_SOURCE=1
+      DEV_SOURCE_DIR="${2:?missing value for --dev-source-dir}"
+      shift 2
+      ;;
+    --pair-identity)
+      PAIR_IDENTITY="${2:?missing value for --pair-identity}"
+      shift 2
+      ;;
+    --pair-code)
+      PAIR_CODE="${2:?missing value for --pair-code}"
+      shift 2
+      ;;
+    --pair-code-hash)
+      PAIR_CODE_HASH="${2:?missing value for --pair-code-hash}"
+      shift 2
+      ;;
     --no-timer)
       SETUP_TIMER=0
       shift
@@ -235,6 +273,21 @@ if [[ "$DEV_POLL" -eq 1 ]]; then
   install_args+=(--dev-poll)
 else
   install_args+=(--timer-interval "$TIMER_INTERVAL")
+fi
+if [[ "$DEV_SOURCE" -eq 1 ]]; then
+  install_args+=(--dev-source --dev-branch "$DEV_SOURCE_BRANCH")
+  if [[ -n "$DEV_SOURCE_DIR" ]]; then
+    install_args+=(--dev-source-dir "$DEV_SOURCE_DIR")
+  fi
+fi
+if [[ -n "$PAIR_IDENTITY" ]]; then
+  install_args+=(--pair-identity "$PAIR_IDENTITY")
+fi
+if [[ -n "$PAIR_CODE" ]]; then
+  install_args+=(--pair-code "$PAIR_CODE")
+fi
+if [[ -n "$PAIR_CODE_HASH" ]]; then
+  install_args+=(--pair-code-hash "$PAIR_CODE_HASH")
 fi
 if [[ -n "$CURL_PROXY_URL" ]]; then
   install_args+=(--proxy-url "$CURL_PROXY_URL")

@@ -8,6 +8,9 @@ REPO_OWNER="${REPO_OWNER:-Aux0x7F}"
 REPO_NAME="${REPO_NAME:-constitute-gateway}"
 TIMER_INTERVAL="${TIMER_INTERVAL:-30m}"
 DEV_POLL=0
+DEV_SOURCE=0
+DEV_SOURCE_BRANCH="main"
+DEV_SOURCE_DIR=""
 TEMPLATE="${REPO_ROOT}/infra/fcos/config.template.bu"
 OUTPUT_BU="${REPO_ROOT}/infra/fcos/generated/config.bu"
 OUTPUT_IGN="${REPO_ROOT}/infra/fcos/generated/config.ign"
@@ -26,6 +29,9 @@ Options:
   --repo-name <name>       GitHub repo (default: constitute-gateway)
   --timer-interval <value> Gateway update timer interval (default: 30m)
   --dev-poll               Use development polling profile in bootstrap command
+  --dev-source             Bootstrap gateway from source branch instead of releases/latest
+  --dev-branch <name>      Branch for --dev-source (default: main)
+  --dev-source-dir <path>  Source checkout path on host (optional)
   --output-bu <path>       Rendered Butane output path
   --output-ign <path>      Ignition output path
   --skip-ignition          Render Butane only
@@ -58,6 +64,20 @@ while [[ $# -gt 0 ]]; do
     --dev-poll)
       DEV_POLL=1
       shift
+      ;;
+    --dev-source)
+      DEV_SOURCE=1
+      shift
+      ;;
+    --dev-branch)
+      DEV_SOURCE=1
+      DEV_SOURCE_BRANCH="${2:?missing value for --dev-branch}"
+      shift 2
+      ;;
+    --dev-source-dir)
+      DEV_SOURCE=1
+      DEV_SOURCE_DIR="${2:?missing value for --dev-source-dir}"
+      shift 2
       ;;
     --output-bu)
       OUTPUT_BU="${2:?missing value for --output-bu}"
@@ -110,6 +130,12 @@ if [[ "$DEV_POLL" -eq 1 ]]; then
   bootstrap_flags+=(--dev-poll)
 else
   bootstrap_flags+=(--timer-interval "$TIMER_INTERVAL")
+fi
+if [[ "$DEV_SOURCE" -eq 1 ]]; then
+  bootstrap_flags+=(--dev-source --dev-branch "$DEV_SOURCE_BRANCH")
+  if [[ -n "$DEV_SOURCE_DIR" ]]; then
+    bootstrap_flags+=(--dev-source-dir "$DEV_SOURCE_DIR")
+  fi
 fi
 
 printf -v bootstrap_flags_str '%q ' "${bootstrap_flags[@]}"
