@@ -10,6 +10,21 @@
 - Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1`
 
 ## Install and Update
+## Operator Utility (Preferred Installer UX)
+Release assets include a native installer utility:
+- `constitute-operator-windows.zip`
+- `constitute-operator-linux-amd64.tar.gz`
+
+Run with GUI:
+- Windows: `constitute-operator.exe --gui`
+- Linux: `./constitute-operator --gui`
+
+Run with CLI:
+- Linux image: `constitute-operator linux-image --help`
+- Windows service: `constitute-operator windows-service --help`
+
+Default behavior consumes `releases/latest`. Dev source mode is explicit (`--dev-source`).
+
 ### Linux opinionated baseline deploy
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/deploy-opinionated.sh | bash
@@ -124,7 +139,7 @@ Baseline guidance:
 
 ## End-to-End Lab Smoke (Gateway + NVR + Web)
 1. Boot/install gateway host (FCOS flow or Linux install) and verify service is running.
-2. In `constitute` web shell (`Settings > Appliances`), generate/copy gateway install command and run it on the host to auto-associate gateway identity.
+2. In `constitute` web shell (`Settings > Appliances`), download installer utility, run it on the operator host, and complete target selection + pairing bootstrap in the utility.
 3. Wait for gateway to appear as owned appliance in web UI.
 4. In the same Appliances panel, on that gateway row select `Install NVR Service`.
 5. Web publishes `gateway_service_install_request`; gateway executes NVR installer locally and emits `gateway_service_install_status` (`accepted|started|complete|failed|rejected`).

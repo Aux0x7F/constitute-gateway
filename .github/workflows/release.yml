@@ -19,16 +19,23 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build (Linux)
-        run: cargo build --release --features platform-linux
+        run: |
+          cargo build --release --bin constitute-gateway --features platform-linux
+          cargo build --release --bin constitute-operator --features platform-linux,operator-gui
 
       - name: Package Linux artifact
         run: bash scripts/linux/package.sh
+
+      - name: Package Linux operator artifact
+        run: bash scripts/linux/package-operator.sh
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: constitute-gateway-linux
-          path: constitute-gateway-linux-amd64.tar.gz
+          path: |
+            constitute-gateway-linux-amd64.tar.gz
+            constitute-operator-linux-amd64.tar.gz
 
   windows:
     runs-on: windows-latest
@@ -40,7 +47,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build (Windows)
-        run: cargo build --release --features platform-windows
+        run: |
+          cargo build --release --bin constitute-gateway --features platform-windows
+          cargo build --release --bin constitute-operator --features platform-windows,operator-gui
 
       - name: Download NSSM
         shell: pwsh
@@ -72,6 +81,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item target\release\constitute-gateway.exe dist\constitute-gateway.exe
+          Copy-Item target\release\constitute-operator.exe dist\constitute-operator.exe
           Copy-Item config.example.json dist\config.json
           Copy-Item README.md dist\README.md
           New-Item -ItemType Directory -Force -Path dist\nssm | Out-Null
@@ -79,11 +89,18 @@ jobs:
           Copy-Item -Recurse -Force scripts dist\scripts
           Compress-Archive -Path dist\* -DestinationPath constitute-gateway-windows.zip
 
+          New-Item -ItemType Directory -Force -Path operator-dist | Out-Null
+          Copy-Item target\release\constitute-operator.exe operator-dist\constitute-operator.exe
+          Copy-Item -Recurse -Force scripts operator-dist\scripts
+          Compress-Archive -Path operator-dist\* -DestinationPath constitute-operator-windows.zip
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: constitute-gateway-windows
-          path: constitute-gateway-windows.zip
+          path: |
+            constitute-gateway-windows.zip
+            constitute-operator-windows.zip
 
   release:
     runs-on: ubuntu-latest
@@ -104,12 +121,27 @@ jobs:
             exit 1
           fi
           cp "$linux_file" out/constitute-gateway-linux-amd64.tar.gz
+
+          linux_operator_file=$(find dist -type f -name "constitute-operator-linux-amd64.tar.gz" | head -n 1)
+          if [ -z "$linux_operator_file" ]; then
+            echo "linux operator tarball not found" >&2
+            exit 1
+          fi
+          cp "$linux_operator_file" out/constitute-operator-linux-amd64.tar.gz
+
           win_file=$(find dist -type f -name "constitute-gateway-windows.zip" | head -n 1)
           if [ -z "$win_file" ]; then
             echo "windows zip not found" >&2
             exit 1
           fi
           cp "$win_file" out/constitute-gateway-windows.zip
+
+          win_operator_file=$(find dist -type f -name "constitute-operator-windows.zip" | head -n 1)
+          if [ -z "$win_operator_file" ]; then
+            echo "windows operator zip not found" >&2
+            exit 1
+          fi
+          cp "$win_operator_file" out/constitute-operator-windows.zip
 
       - name: Generate checksums
         shell: bash
@@ -123,4 +155,3 @@ jobs:
           files: out/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-
