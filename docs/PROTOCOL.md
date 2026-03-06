@@ -42,7 +42,11 @@ Content fields:
 - `expiresAt` (required, ms)
 - `role` (required)
 - `relays` (array, optional)
+- `hostPlatform` (optional; `linux`, `windows`, or `unknown`)
 - `serviceVersion` (required)
+- `releaseChannel` (optional; `release` or `dev-source`)
+- `releaseTrack` (optional; `latest` or branch name)
+- `releaseBranch` (optional; non-empty for source-tracked installs)
 
 ### 2) Zone Presence
 Signed Nostr event:
@@ -58,7 +62,11 @@ Content fields:
 - `swarm` (required; may be empty until endpoint resolves)
 - `role` (required)
 - `relays` (array, optional)
+- `hostPlatform` (optional; `linux`, `windows`, or `unknown`)
 - `serviceVersion` (required)
+- `releaseChannel` (optional; `release` or `dev-source`)
+- `releaseTrack` (optional; `latest` or branch name)
+- `releaseBranch` (optional; non-empty for source-tracked installs)
 - `metrics` (optional)
 - `ts` (required, ms)
 - `ttl` (required, seconds)
@@ -109,6 +117,37 @@ Incoming type:
 Fields:
 - Required: `scope` or `dhtScope`, `key` or `dhtKey`, `value`
 - Optional: `zone`, `updatedAt`, `expiresAt`, `requestId`
+
+### Request: Gateway Service Install
+Incoming type:
+- `gateway_service_install_request`
+
+Current supported operation:
+- `service = nvr`
+- `action = install`
+
+Required fields:
+- `requestId`
+- `toDevicePk` (must match gateway `devicePk`)
+- `identityId` (must match gateway runtime `identity_id`)
+- `pairIdentity`
+- `pairCode`
+- `pairCodeHash`
+
+Optional fields:
+- `zone` / `zoneKeys`
+- `authorizedDevicePks`
+- `swarmPeers`
+- `publicWsUrl`
+- `allowUnsignedHelloMvp`
+- `reolink*` provisioning hints
+- `storageRoot`
+- `timeoutSecs`
+
+Gateway status events:
+- `gateway_service_install_status`
+- status lifecycle: `accepted` -> `started` -> (`complete` | `failed` | `rejected`)
+- includes `requestId`, `gatewayPk`, `toDevicePk`, `identityId`, `service`, `action`, optional `reason`/`detail`
 
 ## Gateway <-> Gateway Mesh Transport
 

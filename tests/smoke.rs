@@ -9,6 +9,10 @@ fn discovery_envelope_shape() {
         "",
         "gateway",
         vec!["wss://relay.example".to_string()],
+        "linux",
+        "release",
+        "latest",
+        "",
     );
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
     let (_metrics_tx, metrics_rx) =
@@ -50,6 +54,8 @@ fn discovery_envelope_shape() {
     let payload: Value = serde_json::from_str(content).expect("payload json");
     assert_eq!(payload["devicePk"], "pk-test");
     assert_eq!(payload["serviceVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(payload["releaseChannel"], "release");
+    assert_eq!(payload["releaseTrack"], "latest");
 }
 
 #[test]
@@ -60,6 +66,10 @@ fn zone_presence_envelope_shape() {
         "",
         "gateway",
         vec!["wss://relay.example".to_string()],
+        "linux",
+        "release",
+        "latest",
+        "",
     );
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
     let (_metrics_tx, metrics_rx) =
@@ -96,6 +106,8 @@ fn zone_presence_envelope_shape() {
     assert_eq!(payload["zone"], "zonekey");
     assert_eq!(payload["devicePk"], "pubkey");
     assert_eq!(payload["serviceVersion"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(payload["releaseChannel"], "release");
+    assert_eq!(payload["releaseTrack"], "latest");
     assert!(payload.get("metrics").is_some());
     assert!(payload["metrics"]["clients"].is_number());
 }

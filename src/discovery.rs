@@ -79,8 +79,16 @@ pub struct SwarmDeviceRecord {
     pub role: String,
     #[serde(default)]
     pub relays: Vec<String>,
+    #[serde(default)]
+    pub host_platform: String,
     #[serde(default = "default_service_version")]
     pub service_version: String,
+    #[serde(default = "default_release_channel")]
+    pub release_channel: String,
+    #[serde(default = "default_release_track")]
+    pub release_track: String,
+    #[serde(default)]
+    pub release_branch: String,
 }
 
 impl SwarmDeviceRecord {
@@ -90,6 +98,10 @@ impl SwarmDeviceRecord {
         device_label: &str,
         role: &str,
         relays: Vec<String>,
+        host_platform: &str,
+        release_channel: &str,
+        release_track: &str,
+        release_branch: &str,
     ) -> Self {
         let now = now_ms();
         Self {
@@ -100,7 +112,11 @@ impl SwarmDeviceRecord {
             expires_at: now + RECORD_TTL_MS,
             role: role.to_string(),
             relays,
+            host_platform: host_platform.to_string(),
             service_version: service_version(),
+            release_channel: release_channel.to_string(),
+            release_track: release_track.to_string(),
+            release_branch: release_branch.to_string(),
         }
     }
 
@@ -120,8 +136,16 @@ struct ZonePresencePayload {
     role: String,
     #[serde(default)]
     relays: Vec<String>,
+    #[serde(default)]
+    host_platform: String,
     #[serde(default = "default_service_version")]
     service_version: String,
+    #[serde(default = "default_release_channel")]
+    release_channel: String,
+    #[serde(default = "default_release_track")]
+    release_track: String,
+    #[serde(default)]
+    release_branch: String,
     #[serde(default)]
     #[allow(dead_code)]
     metrics: Option<GatewayMetrics>,
@@ -221,7 +245,11 @@ impl DiscoveryClient {
             swarm: swarm_endpoint,
             role: self.device_record.role.clone(),
             relays: self.device_record.relays.clone(),
+            host_platform: self.device_record.host_platform.clone(),
             service_version: self.device_record.service_version.clone(),
+            release_channel: self.device_record.release_channel.clone(),
+            release_track: self.device_record.release_track.clone(),
+            release_branch: self.device_record.release_branch.clone(),
             metrics: Some(self.metrics_rx.borrow().clone()),
             ts: util::now_unix_seconds() * 1000,
             ttl: 120,
@@ -261,6 +289,14 @@ pub fn default_record_tag() -> String {
 
 fn default_service_version() -> String {
     service_version()
+}
+
+fn default_release_channel() -> String {
+    "release".to_string()
+}
+
+fn default_release_track() -> String {
+    "latest".to_string()
 }
 
 pub fn service_version() -> String {

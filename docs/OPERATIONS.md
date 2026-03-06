@@ -30,13 +30,36 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scr
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --dev-poll
 ```
 
+### Linux source-tracked install/update (development branch)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --dev-source --dev-branch main --setup-timer --dev-poll
+```
+
+Notes:
+- `--dev-source` clones/pulls and builds from branch instead of consuming `releases/latest`.
+- Requires `git` + `cargo` on the host used for updates.
+
 ### Windows release install/update
 - Script path: `scripts/windows/install-latest.ps1`
 - Default bundle path: `%ProgramData%\Constitute\Gateway\bundle`
+- Auto-update: registers a Windows Scheduled Task (`<ServiceName>-AutoUpdate`) polling `releases/latest` every 30 minutes by default
+
+### Windows source-tracked install/update (development branch)
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\install-latest.ps1 -DevSource -DevBranch main
+```
+
+Notes:
+- `-DevSource` clones/pulls branch HEAD and builds locally before updating the service.
+- Requires `git` + `cargo` on the host used for updates.
 
 Release source model:
-- Hosts consume `releases/latest` assets.
-- Merges to `main` do not update hosts until a tagged release is published.
+- Hosts consume `releases/latest` assets by default.
+- `--dev-source` hosts follow branch HEAD and build locally.
+- Merges to `main` do not update release-tracked hosts until a tagged release is published.
+
+Published runtime metadata:
+- Gateway advertises `serviceVersion`, `releaseChannel`, `releaseTrack`, and `releaseBranch` in discovery records and zone presence.
 
 ## Service Lifecycle
 ### Linux
@@ -98,6 +121,16 @@ Baseline guidance:
 ## TURN Boundary
 - Gateway does not host TURN.
 - TURN remains an operator/client concern for browser-side connectivity fallback.
+
+## End-to-End Lab Smoke (Gateway + NVR + Web)
+1. Boot/install gateway host (FCOS flow or Linux install) and verify service is running.
+2. In `constitute` web shell (`Settings > Appliances`), generate/copy gateway install command and run it on the host to auto-associate gateway identity.
+3. Wait for gateway to appear as owned appliance in web UI.
+4. In the same Appliances panel, on that gateway row select `Install NVR Service`.
+5. Web publishes `gateway_service_install_request`; gateway executes NVR installer locally and emits `gateway_service_install_status` (`accepted|started|complete|failed|rejected`).
+6. Confirm NVR appears in Appliances; open `Security Cameras` app.
+7. In NVR config enable Reolink auto-provision (`autoprovision.reolink_enabled=true` with credentials) and restart NVR.
+8. Verify cameras appear in `list_sources` and segments are retrievable from UI.
 
 ## Verification Checklist
 - Service is installed and active (or intentionally stopped).
