@@ -31,9 +31,19 @@ In progress:
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/deploy-opinionated.sh | bash
 ```
 
+### Linux (source-tracked dev branch, frequent sync/build timer)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --dev-source --dev-branch main --setup-timer --dev-poll
+```
+
 ### Windows (install/update latest release as service)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing | iex"
+```
+
+### Windows (source-tracked dev branch, frequent sync/build task)
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content)) -DevSource -DevBranch main"
 ```
 
 ## Start Here

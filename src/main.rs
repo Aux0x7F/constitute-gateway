@@ -19,6 +19,8 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
+#[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
+use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
 use sysinfo::{CpuExt, System, SystemExt};
@@ -139,6 +141,28 @@ struct Config {
     nostr_pubkey: String,
     #[serde(default)]
     nostr_sk_hex: String,
+    #[serde(default = "default_release_channel")]
+    release_channel: String,
+    #[serde(default = "default_release_track")]
+    release_track: String,
+    #[serde(default)]
+    release_branch: String,
+    #[serde(default)]
+    pair_identity_label: String,
+    #[serde(default)]
+    pair_code: String,
+    #[serde(default)]
+    pair_code_hash: String,
+    #[serde(default = "default_pair_request_interval_secs")]
+    pair_request_interval_secs: u64,
+    #[serde(default = "default_pair_request_attempts")]
+    pair_request_attempts: u32,
+    #[serde(default = "default_remote_service_install_enabled")]
+    remote_service_install_enabled: bool,
+    #[serde(default = "default_remote_service_install_timeout_secs")]
+    remote_service_install_timeout_secs: u64,
+    #[serde(default)]
+    authorized_control_device_pks: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -153,7 +177,89 @@ struct ZonePresencePayload {
     service_version: String,
     #[serde(default)]
     #[allow(dead_code)]
+    release_channel: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    release_track: String,
+    #[serde(default)]
+    #[allow(dead_code)]
+    release_branch: String,
+    #[serde(default)]
+    #[allow(dead_code)]
     metrics: Option<discovery::GatewayMetrics>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayServiceInstallRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(default)]
+    service: String,
+    #[serde(default)]
+    action: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(rename = "pairIdentity", default)]
+    pair_identity: String,
+    #[serde(rename = "pairCode", default)]
+    pair_code: String,
+    #[serde(rename = "pairCodeHash", default)]
+    pair_code_hash: String,
+    #[serde(rename = "zoneKeys", default)]
+    zone_keys: Vec<String>,
+    #[serde(rename = "authorizedDevicePks", default)]
+    authorized_device_pks: Vec<String>,
+    #[serde(rename = "swarmPeers", default)]
+    swarm_peers: Vec<String>,
+    #[serde(rename = "publicWsUrl", default)]
+    public_ws_url: String,
+    #[serde(rename = "allowUnsignedHelloMvp", default)]
+    allow_unsigned_hello_mvp: Option<bool>,
+    #[serde(rename = "reolinkAutoprovision", default)]
+    reolink_autoprovision: Option<bool>,
+    #[serde(rename = "reolinkUsername", default)]
+    reolink_username: String,
+    #[serde(rename = "reolinkPassword", default)]
+    reolink_password: String,
+    #[serde(rename = "reolinkDesiredPassword", default)]
+    reolink_desired_password: String,
+    #[serde(rename = "reolinkGeneratePassword", default)]
+    reolink_generate_password: Option<bool>,
+    #[serde(rename = "reolinkHintIp", default)]
+    reolink_hint_ip: String,
+    #[serde(rename = "storageRoot", default)]
+    storage_root: String,
+    #[serde(rename = "timeoutSecs", default)]
+    timeout_secs: Option<u64>,
+    #[serde(default)]
+    zone: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewayServiceInstallStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    service: String,
+    action: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zone: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
 }
 
 fn default_bind() -> String {
@@ -217,6 +323,30 @@ fn default_self_test_enabled() -> bool {
 
 fn default_self_test_timeout_secs() -> u64 {
     8
+}
+
+fn default_release_channel() -> String {
+    "release".to_string()
+}
+
+fn default_release_track() -> String {
+    "latest".to_string()
+}
+
+fn default_pair_request_interval_secs() -> u64 {
+    15
+}
+
+fn default_pair_request_attempts() -> u32 {
+    24
+}
+
+fn default_remote_service_install_enabled() -> bool {
+    true
+}
+
+fn default_remote_service_install_timeout_secs() -> u64 {
+    900
 }
 
 fn default_udp_handshake_interval_secs() -> u64 {
@@ -491,6 +621,10 @@ async fn main() -> Result<()> {
         &device_label,
         &node_role,
         advertise_relays.clone(),
+        platform::runtime_platform(),
+        cfg.release_channel.trim(),
+        cfg.release_track.trim(),
+        cfg.release_branch.trim(),
     );
 
     let (swarm_tx, swarm_rx) = watch::channel(cfg.swarm_endpoint.clone());
@@ -575,6 +709,66 @@ async fn main() -> Result<()> {
             None
         }
     };
+
+    let pair_identity_label = cfg.pair_identity_label.trim().to_string();
+    let pair_code = cfg.pair_code.trim().to_string();
+    let pair_code_hash = if !cfg.pair_code_hash.trim().is_empty() {
+        cfg.pair_code_hash.trim().to_string()
+    } else if !pair_identity_label.is_empty() && !pair_code.is_empty() {
+        util::sha256_b64url(&format!("{}|{}", pair_identity_label, pair_code))
+    } else {
+        String::new()
+    };
+
+    if !pair_identity_label.is_empty() {
+        if pair_code_hash.is_empty() {
+            warn!("pair_identity_label configured but no pair_code or pair_code_hash was provided");
+        } else if cfg.nostr_pubkey.is_empty() || cfg.nostr_sk_hex.is_empty() {
+            warn!("pairing enroll request skipped: nostr keypair unavailable");
+        } else {
+            let relay_for_pair = relay_pool.clone();
+            let local_for_pair = local_relay.clone();
+            let pair_pk = cfg.nostr_pubkey.clone();
+            let pair_sk = cfg.nostr_sk_hex.clone();
+            let pair_label = cfg.device_label.clone();
+            let pair_zones = zones.clone();
+            let pair_interval = Duration::from_secs(cfg.pair_request_interval_secs.max(5));
+            let pair_attempts = cfg.pair_request_attempts.max(1);
+            tokio::spawn(async move {
+                let mut ticker = tokio::time::interval(pair_interval);
+                for attempt in 1..=pair_attempts {
+                    match build_pair_request_event(
+                        &pair_pk,
+                        &pair_sk,
+                        &pair_identity_label,
+                        &pair_code,
+                        &pair_code_hash,
+                        &pair_label,
+                        &pair_zones,
+                    ) {
+                        Ok(ev) => {
+                            relay_for_pair.broadcast(&nostr::frame_event(&ev));
+                            if let Some(local) = local_for_pair.as_ref() {
+                                if let Ok(val) = serde_json::to_value(ev) {
+                                    local.publish_event(val).await;
+                                }
+                            }
+                            info!(
+                                attempt,
+                                attempts = pair_attempts,
+                                identity = %pair_identity_label,
+                                "published gateway pair_request enrollment"
+                            );
+                        }
+                        Err(err) => {
+                            warn!(error = %err, "failed building gateway pair_request enrollment");
+                        }
+                    }
+                    ticker.tick().await;
+                }
+            });
+        }
+    }
 
     if cfg.metrics_interval_secs > 0 {
         let interval = Duration::from_secs(cfg.metrics_interval_secs.max(5));
@@ -702,6 +896,7 @@ async fn main() -> Result<()> {
     let inbound_ctx = InboundContext {
         self_pk: cfg.nostr_pubkey.clone(),
         self_sk: cfg.nostr_sk_hex.clone(),
+        gateway_identity_id: cfg.identity_id.clone(),
         rebroadcast: cfg.relay_rebroadcast,
         relay_pool: relay_pool.clone(),
         local_relay: local_relay.clone(),
@@ -715,6 +910,14 @@ async fn main() -> Result<()> {
         seen: seen_cache.clone(),
         seen_ttl: validation.replay_window,
         seen_max: 4096,
+        remote_service_install_enabled: cfg.remote_service_install_enabled,
+        remote_service_install_timeout_secs: cfg.remote_service_install_timeout_secs.max(60),
+        authorized_control_device_pks: cfg
+            .authorized_control_device_pks
+            .iter()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+            .collect(),
     };
 
     let ctx_nostr = inbound_ctx.clone();
@@ -1013,6 +1216,265 @@ fn request_timeout(payload: &Value) -> Duration {
     Duration::from_millis(capped)
 }
 
+fn make_install_request_id() -> String {
+    let mut rng = rand::thread_rng();
+    format!("svc-{}-{:08x}", util::now_unix_seconds(), rng.next_u32())
+}
+
+fn trim_nonempty(value: &str) -> String {
+    value.trim().to_string()
+}
+
+fn dedup_trimmed(values: &[String], max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in values {
+        let trimmed = item.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let trimmed = trimmed.to_string();
+        if out.contains(&trimmed) {
+            continue;
+        }
+        out.push(trimmed);
+        if out.len() >= max {
+            break;
+        }
+    }
+    out
+}
+
+fn normalize_gateway_service_install_request(req: &mut GatewayServiceInstallRequest) {
+    req.request_id = trim_nonempty(&req.request_id);
+    if req.request_id.is_empty() {
+        req.request_id = make_install_request_id();
+    }
+    req.to_device_pk = trim_nonempty(&req.to_device_pk);
+    req.service = trim_nonempty(&req.service).to_ascii_lowercase();
+    if req.service.is_empty() {
+        req.service = "nvr".to_string();
+    }
+    req.action = trim_nonempty(&req.action).to_ascii_lowercase();
+    if req.action.is_empty() {
+        req.action = "install".to_string();
+    }
+    req.identity_id = trim_nonempty(&req.identity_id);
+    req.pair_identity = trim_nonempty(&req.pair_identity);
+    req.pair_code = trim_nonempty(&req.pair_code);
+    req.pair_code_hash = trim_nonempty(&req.pair_code_hash);
+    req.public_ws_url = trim_nonempty(&req.public_ws_url);
+    req.reolink_username = trim_nonempty(&req.reolink_username);
+    req.reolink_password = trim_nonempty(&req.reolink_password);
+    req.reolink_desired_password = trim_nonempty(&req.reolink_desired_password);
+    req.reolink_hint_ip = trim_nonempty(&req.reolink_hint_ip);
+    req.storage_root = trim_nonempty(&req.storage_root);
+    req.zone = trim_nonempty(&req.zone);
+    req.zone_keys = dedup_trimmed(&req.zone_keys, 32);
+    req.authorized_device_pks = dedup_trimmed(&req.authorized_device_pks, 256);
+    req.swarm_peers = dedup_trimmed(&req.swarm_peers, 32);
+}
+
+async fn publish_gateway_service_install_status(
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &GatewayServiceInstallStatusPayload,
+) -> Result<()> {
+    if pubkey.is_empty() || sk_hex.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(payload)?;
+    let ev = build_app_event(pubkey, sk_hex, &value)?;
+    relay_pool.broadcast(&nostr::frame_event(&ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(ev) {
+            local.publish_event(val).await;
+        }
+    }
+    Ok(())
+}
+
+async fn is_requester_authorized_for_service_install(
+    ctx: &InboundContext,
+    requester_pk: &str,
+    identity_id: &str,
+) -> bool {
+    let requester = requester_pk.trim();
+    let identity = identity_id.trim();
+    if requester.is_empty() || identity.is_empty() {
+        return false;
+    }
+
+    if !ctx.authorized_control_device_pks.is_empty()
+        && !ctx.authorized_control_device_pks.contains(requester)
+    {
+        return false;
+    }
+
+    let guard = ctx.store.lock().await;
+    let rec = match guard.get_device_event_any(requester) {
+        Some(rec) => rec,
+        None => return false,
+    };
+    match record_identity_id(&rec) {
+        Some(id) => id.trim() == identity,
+        None => false,
+    }
+}
+
+#[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
+fn summarize_output(mut stdout: Vec<u8>, stderr: Vec<u8>) -> String {
+    if stdout.is_empty() && stderr.is_empty() {
+        return String::new();
+    }
+    stdout.extend_from_slice(&stderr);
+    let mut text = String::from_utf8_lossy(&stdout).to_string();
+    if text.len() > 2000 {
+        text.truncate(2000);
+    }
+    text
+}
+
+#[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
+fn execute_nvr_install_request(
+    req: &GatewayServiceInstallRequest,
+    timeout_secs: u64,
+) -> Result<String> {
+    let script_url = "https://raw.githubusercontent.com/Aux0x7F/constitute-nvr/main/scripts/linux/install-latest.sh";
+    let script_path = std::env::temp_dir().join(format!(
+        "constitute-nvr-install-{}-{}.sh",
+        std::process::id(),
+        util::now_unix_seconds()
+    ));
+
+    let curl_status = Command::new("curl")
+        .arg("-fsSL")
+        .arg(script_url)
+        .arg("-o")
+        .arg(&script_path)
+        .status();
+    let downloaded = matches!(curl_status, Ok(status) if status.success());
+    if !downloaded {
+        return Err(anyhow!("failed to download NVR installer script"));
+    }
+
+    let mut args: Vec<String> = vec![
+        script_path.to_string_lossy().to_string(),
+        "--non-interactive".to_string(),
+        "--identity-id".to_string(),
+        req.identity_id.clone(),
+        "--pair-identity".to_string(),
+        req.pair_identity.clone(),
+        "--pair-code".to_string(),
+        req.pair_code.clone(),
+        "--pair-code-hash".to_string(),
+        req.pair_code_hash.clone(),
+    ];
+
+    if req.allow_unsigned_hello_mvp.unwrap_or(true) {
+        args.push("--allow-unsigned-hello-mvp".to_string());
+    } else {
+        args.push("--require-signed-hello".to_string());
+    }
+
+    if !req.public_ws_url.is_empty() {
+        args.push("--public-ws-url".to_string());
+        args.push(req.public_ws_url.clone());
+    }
+
+    for peer in &req.swarm_peers {
+        args.push("--swarm-peer".to_string());
+        args.push(peer.clone());
+    }
+    for zone in &req.zone_keys {
+        args.push("--zone-key".to_string());
+        args.push(zone.clone());
+    }
+    for pk in &req.authorized_device_pks {
+        args.push("--authorized-device-pk".to_string());
+        args.push(pk.clone());
+    }
+
+    if req.reolink_autoprovision.unwrap_or(true) {
+        args.push("--enable-reolink-autoprovision".to_string());
+    } else {
+        args.push("--disable-reolink-autoprovision".to_string());
+    }
+
+    if !req.reolink_username.is_empty() {
+        args.push("--reolink-username".to_string());
+        args.push(req.reolink_username.clone());
+    }
+    if !req.reolink_password.is_empty() {
+        args.push("--reolink-password".to_string());
+        args.push(req.reolink_password.clone());
+    }
+    if !req.reolink_desired_password.is_empty() {
+        args.push("--reolink-desired-password".to_string());
+        args.push(req.reolink_desired_password.clone());
+    }
+    if req.reolink_generate_password.unwrap_or(false) {
+        args.push("--reolink-generate-password".to_string());
+    }
+    if !req.reolink_hint_ip.is_empty() {
+        args.push("--reolink-hint-ip".to_string());
+        args.push(req.reolink_hint_ip.clone());
+    }
+    if !req.storage_root.is_empty() {
+        args.push("--storage-root".to_string());
+        args.push(req.storage_root.clone());
+    }
+
+    let has_timeout_bin = Command::new("timeout")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    let mut cmd = if has_timeout_bin {
+        let mut c = Command::new("timeout");
+        c.arg(format!("{}s", timeout_secs.max(60)));
+        c.arg("bash");
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c
+    };
+
+    for arg in args {
+        cmd.arg(arg);
+    }
+
+    let out = cmd.output()?;
+    let _ = std::fs::remove_file(&script_path);
+
+    if !out.status.success() {
+        if has_timeout_bin && out.status.code() == Some(124) {
+            return Err(anyhow!("nvr install timed out after {}s", timeout_secs.max(60)));
+        }
+        return Err(anyhow!(
+            "nvr install failed (code={:?}): {}",
+            out.status.code(),
+            summarize_output(out.stdout, out.stderr)
+        ));
+    }
+
+    Ok(summarize_output(out.stdout, out.stderr))
+}
+
+#[cfg(not(all(feature = "platform-linux", not(feature = "platform-windows"))))]
+fn execute_nvr_install_request(
+    _req: &GatewayServiceInstallRequest,
+    _timeout_secs: u64,
+) -> Result<String> {
+    Err(anyhow!(
+        "remote NVR install is supported only on Linux gateway hosts"
+    ))
+}
+
 fn record_identity_id(record: &nostr::NostrEvent) -> Option<String> {
     let payload: Value = serde_json::from_str(&record.content).ok()?;
     payload
@@ -1287,6 +1749,55 @@ fn build_app_event(pubkey: &str, sk_hex: &str, payload: &Value) -> Result<nostr:
     nostr::sign_event(&unsigned, sk_hex)
 }
 
+fn build_pair_request_event(
+    pubkey: &str,
+    sk_hex: &str,
+    identity_label: &str,
+    code: &str,
+    code_hash: &str,
+    device_label: &str,
+    zones: &[String],
+) -> Result<nostr::NostrEvent> {
+    let mut tags = vec![
+        vec!["t".to_string(), "constitute".to_string()],
+        vec!["i".to_string(), identity_label.to_string()],
+    ];
+    for z in zones {
+        let key = z.trim();
+        if key.is_empty() {
+            continue;
+        }
+        tags.push(vec!["z".to_string(), key.to_string()]);
+    }
+
+    let req_id = format!(
+        "gw-enroll-{}-{}",
+        &pubkey.chars().take(12).collect::<String>(),
+        util::now_unix_seconds()
+    );
+    let payload = serde_json::json!({
+        "type": "pair_request",
+        "identity": identity_label,
+        "requestId": req_id,
+        "code": code,
+        "codeHash": code_hash,
+        "devicePk": pubkey,
+        "deviceDid": format!("did:device:nostr:{}", pubkey),
+        "deviceLabel": device_label,
+        "ts": util::now_unix_seconds() * 1000,
+        "ttl": 120,
+    });
+
+    let unsigned = nostr::build_unsigned_event(
+        pubkey,
+        1,
+        tags,
+        payload.to_string(),
+        util::now_unix_seconds(),
+    );
+    nostr::sign_event(&unsigned, sk_hex)
+}
+
 fn build_record_app_event(
     pubkey: &str,
     sk_hex: &str,
@@ -1335,6 +1846,289 @@ async fn publish_record_app_event(
         }
     }
     Ok(())
+}
+
+fn build_gateway_service_install_status_payload(
+    req: &GatewayServiceInstallRequest,
+    gateway_pk: &str,
+    status: &str,
+    reason: Option<String>,
+    detail: Option<String>,
+    zone: Option<String>,
+) -> GatewayServiceInstallStatusPayload {
+    GatewayServiceInstallStatusPayload {
+        kind: "gateway_service_install_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.to_device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        service: req.service.clone(),
+        action: req.action.clone(),
+        identity_id: req.identity_id.clone(),
+        zone,
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
+    }
+}
+
+async fn handle_gateway_service_install_request(
+    ctx: &InboundContext,
+    nostr_ev: &nostr::NostrEvent,
+    payload: &Value,
+) {
+    let mut req: GatewayServiceInstallRequest = match serde_json::from_value(payload.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            warn!(error = %err, "invalid gateway_service_install_request payload");
+            return;
+        }
+    };
+    normalize_gateway_service_install_request(&mut req);
+
+    if req.to_device_pk != ctx.self_pk {
+        return;
+    }
+
+    let zone = if req.zone.is_empty() {
+        payload_zone(payload)
+    } else {
+        Some(req.zone.clone())
+    };
+
+    let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
+        build_gateway_service_install_status_payload(&req, &ctx.self_pk, status, reason, detail, zone.clone())
+    };
+
+    if !ctx.remote_service_install_enabled {
+        let status = publish_status(
+            "rejected",
+            Some("remote_install_disabled".to_string()),
+            Some("gateway remote service install is disabled".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.service != "nvr" || req.action != "install" {
+        let status = publish_status(
+            "rejected",
+            Some("unsupported_action".to_string()),
+            Some("only nvr install is supported".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let gateway_identity = ctx.gateway_identity_id.trim();
+    if gateway_identity.is_empty() {
+        let status = publish_status(
+            "rejected",
+            Some("gateway_identity_missing".to_string()),
+            Some("gateway identity is not configured".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.identity_id.trim() != gateway_identity {
+        let status = publish_status(
+            "rejected",
+            Some("identity_mismatch".to_string()),
+            Some("request identity does not match gateway identity".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.pair_identity.is_empty() || req.pair_code.is_empty() || req.pair_code_hash.is_empty() {
+        let status = publish_status(
+            "rejected",
+            Some("missing_pairing_material".to_string()),
+            Some("pairIdentity/pairCode/pairCodeHash are required".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let requester_pk = nostr_ev.pubkey.clone();
+    if !is_requester_authorized_for_service_install(ctx, &requester_pk, &req.identity_id).await {
+        let status = publish_status(
+            "rejected",
+            Some("unauthorized_requester".to_string()),
+            Some("requester is not authorized for this identity".to_string()),
+        );
+        let _ = publish_gateway_service_install_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.zone_keys.is_empty() {
+        if let Some(z) = zone.clone() {
+            req.zone_keys.push(z);
+        } else {
+            req.zone_keys = ctx.zones.clone();
+        }
+    }
+    if req.swarm_peers.is_empty() {
+        req.swarm_peers.push("127.0.0.1:4040".to_string());
+    }
+    if req.public_ws_url.is_empty() {
+        req.public_ws_url = "ws://127.0.0.1:8456/session".to_string();
+    }
+    if !req.authorized_device_pks.contains(&requester_pk) {
+        req.authorized_device_pks.push(requester_pk.clone());
+    }
+
+    let timeout_secs = req
+        .timeout_secs
+        .unwrap_or(ctx.remote_service_install_timeout_secs)
+        .max(60)
+        .min(7200);
+
+    let accepted = build_gateway_service_install_status_payload(
+        &req,
+        &ctx.self_pk,
+        "accepted",
+        None,
+        None,
+        zone.clone(),
+    );
+    let _ = publish_gateway_service_install_status(
+        &ctx.relay_pool,
+        &ctx.local_relay,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        &accepted,
+    )
+    .await;
+
+    let relay_pool = ctx.relay_pool.clone();
+    let local_relay = ctx.local_relay.clone();
+    let self_pk = ctx.self_pk.clone();
+    let self_sk = ctx.self_sk.clone();
+    let zone_copy = zone.clone();
+    let req_for_task = req.clone();
+
+    tokio::spawn(async move {
+        let started = build_gateway_service_install_status_payload(
+            &req_for_task,
+            &self_pk,
+            "started",
+            None,
+            None,
+            zone_copy.clone(),
+        );
+        let _ = publish_gateway_service_install_status(
+            &relay_pool,
+            &local_relay,
+            &self_pk,
+            &self_sk,
+            &started,
+        )
+        .await;
+
+        let run_req = req_for_task.clone();
+        let result = tokio::task::spawn_blocking(move || execute_nvr_install_request(&run_req, timeout_secs)).await;
+
+        match result {
+            Ok(Ok(detail)) => {
+                let status = build_gateway_service_install_status_payload(
+                    &req_for_task,
+                    &self_pk,
+                    "complete",
+                    None,
+                    if detail.is_empty() { None } else { Some(detail) },
+                    zone_copy.clone(),
+                );
+                let _ = publish_gateway_service_install_status(
+                    &relay_pool,
+                    &local_relay,
+                    &self_pk,
+                    &self_sk,
+                    &status,
+                )
+                .await;
+            }
+            Ok(Err(err)) => {
+                let status = build_gateway_service_install_status_payload(
+                    &req_for_task,
+                    &self_pk,
+                    "failed",
+                    Some("install_failed".to_string()),
+                    Some(err.to_string()),
+                    zone_copy.clone(),
+                );
+                let _ = publish_gateway_service_install_status(
+                    &relay_pool,
+                    &local_relay,
+                    &self_pk,
+                    &self_sk,
+                    &status,
+                )
+                .await;
+            }
+            Err(err) => {
+                let status = build_gateway_service_install_status_payload(
+                    &req_for_task,
+                    &self_pk,
+                    "failed",
+                    Some("install_task_join_failed".to_string()),
+                    Some(err.to_string()),
+                    zone_copy.clone(),
+                );
+                let _ = publish_gateway_service_install_status(
+                    &relay_pool,
+                    &local_relay,
+                    &self_pk,
+                    &self_sk,
+                    &status,
+                )
+                .await;
+            }
+        }
+    });
 }
 
 fn build_device_record_event(
@@ -1519,7 +2313,14 @@ const MESH_SIGNAL_RECORD_TYPE: &str = "signal";
 fn is_mesh_passthrough_kind(kind: &str) -> bool {
     matches!(
         kind,
-        "pair_claim" | "pair_request" | "pair_approve" | "pair_reject" | "pair_resolved" | "swarm_signal"
+        "pair_claim"
+            | "pair_request"
+            | "pair_approve"
+            | "pair_reject"
+            | "pair_resolved"
+            | "swarm_signal"
+            | "gateway_service_install_request"
+            | "gateway_service_install_status"
     )
 }
 
@@ -1606,6 +2407,7 @@ struct PendingRequest {
 struct InboundContext {
     self_pk: String,
     self_sk: String,
+    gateway_identity_id: String,
     rebroadcast: bool,
     relay_pool: relay::RelayPool,
     local_relay: Option<local_relay::LocalRelayHandle>,
@@ -1619,6 +2421,9 @@ struct InboundContext {
     seen: Arc<Mutex<SeenCache>>,
     seen_ttl: Duration,
     seen_max: usize,
+    remote_service_install_enabled: bool,
+    remote_service_install_timeout_secs: u64,
+    authorized_control_device_pks: HashSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -1911,6 +2716,11 @@ async fn process_inbound_event(
                 }
             }
         }
+        if kind == "gateway_service_install_request" {
+            handle_gateway_service_install_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
         if kind == "swarm_record_request" || kind == "swarm_discovery_request" {
             let zone = payload_zone(&payload);
             let identity_id = payload
@@ -2880,6 +3690,10 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            gateway_identity_id: "id-test".to_string(),
+            remote_service_install_enabled: false,
+            remote_service_install_timeout_secs: 300,
+            authorized_control_device_pks: HashSet::new(),
         };
 
         // connect a client to observe app events
@@ -3058,6 +3872,10 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            gateway_identity_id: "id-test".to_string(),
+            remote_service_install_enabled: false,
+            remote_service_install_timeout_secs: 300,
+            authorized_control_device_pks: HashSet::new(),
         };
 
         let url = format!("ws://{}", bind);
@@ -3193,6 +4011,10 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            gateway_identity_id: "id-test".to_string(),
+            remote_service_install_enabled: false,
+            remote_service_install_timeout_secs: 300,
+            authorized_control_device_pks: HashSet::new(),
         };
 
         let url = format!("ws://{}", bind);

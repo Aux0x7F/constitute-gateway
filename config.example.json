@@ -39,5 +39,16 @@
   "relay_max_frame_bytes": 65536,
   "relay_bind_tls": "",
   "relay_tls_cert_path": "",
-  "relay_tls_key_path": ""
+  "relay_tls_key_path": "",
+  "pair_identity_label": "",
+  "pair_code": "",
+  "pair_code_hash": "",
+  "pair_request_interval_secs": 15,
+  "pair_request_attempts": 24,
+  "remote_service_install_enabled": true,
+  "remote_service_install_timeout_secs": 900,
+  "authorized_control_device_pks": [],
+  "release_channel": "release",
+  "release_track": "latest",
+  "release_branch": ""
 }

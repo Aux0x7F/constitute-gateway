@@ -11,6 +11,19 @@ Roadmap context: [`docs/ROADMAP.md`](ROADMAP.md).
 - Operator-managed egress controls
 - Reproducible provisioning artifacts
 
+## Auto-Update Image One-Liners
+Linux/macOS operator:
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/fcos/prepare-auto-update-image.sh | bash
+```
+
+Windows operator (WSL-backed):
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/prepare-auto-update-image.ps1 | iex"
+```
+
+These paths embed Ignition with first-boot bootstrap that installs gateway from `releases/latest` and enables the update timer.
+
 ## Provisioning Pipeline
 1. Render Butane config:
 ```bash

@@ -55,3 +55,19 @@ pub fn default_config_path() -> PathBuf {
 pub fn default_config_path() -> PathBuf {
     "./config.json".into()
 }
+
+
+#[cfg(feature = "platform-linux")]
+pub fn runtime_platform() -> &'static str {
+    "linux"
+}
+
+#[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
+pub fn runtime_platform() -> &'static str {
+    "windows"
+}
+
+#[cfg(all(not(feature = "platform-linux"), not(feature = "platform-windows")))]
+pub fn runtime_platform() -> &'static str {
+    "unknown"
+}
