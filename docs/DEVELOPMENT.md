@@ -37,29 +37,17 @@ cargo fmt
 ```
 
 ## Script Layout
-- `scripts/run.sh`: Linux and FCOS command router
+- `scripts/run.sh`: Linux command router
 - `scripts/run.ps1`: Windows command router
-- `scripts/linux/*`: Linux build, install, update, hardening
-- `scripts/windows/*`: Windows build, service, update, image prep helpers
-- `scripts/fcos/*`: FCOS provisioning and image prep
-
-## FCOS Provisioning (Dev)
-Render Butane and Ignition:
-```bash
-./scripts/fcos/render-config.sh --ssh-key-file ~/.ssh/id_ed25519.pub
-```
-
-Render Butane only:
-```bash
-./scripts/fcos/render-config.sh --ssh-key-file ~/.ssh/id_ed25519.pub --skip-ignition
-```
+- `scripts/linux/*`: Linux build, install, update, hardening (`install-dev-local.sh` for dev bootstrap)
+- `scripts/windows/*`: Windows build, service, update
 
 ## CI Parity Checks
 Before opening a PR:
 ```bash
 cargo test --features platform-windows -j 1
 cargo test --features platform-linux -j 1
-bash -n scripts/run.sh scripts/linux/*.sh scripts/fcos/*.sh
+bash -n scripts/run.sh scripts/linux/*.sh
 ```
 
 Optional PowerShell parser check:
@@ -77,7 +65,6 @@ Optional PowerShell parser check:
 - Add or update tests when behavior changes.
 - Keep protocol naming convergent with the web repo.
 - Update docs when protocol, config, or runtime behavior changes.
-- Keep FCOS templates aligned with bootstrap scripts.
 
 ## Done Criteria
 - Tests pass.

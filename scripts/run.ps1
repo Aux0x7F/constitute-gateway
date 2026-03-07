@@ -66,16 +66,11 @@ function Invoke-Tool([string]$name, [string[]]$extra) {
         'update-windows' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\install-latest.ps1') @extra }
         'check-release' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\check-update.ps1') @extra }
         'run-gateway' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\run-gateway.ps1') @extra }
-        'fcos-download-base-image' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\usb-prep.ps1') @extra }
-        'fcos-full-prep' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\usb-prep.ps1') -UseWsl @extra }
         'service-status' { Invoke-ServiceAction 'status' }
         'service-start' { Invoke-ServiceAction 'start' }
         'service-stop' { Invoke-ServiceAction 'stop' }
         'service-restart' { Invoke-ServiceAction 'restart' }
         'service-uninstall' { Invoke-ServiceAction 'uninstall' }
-        # Compatibility aliases (kept for existing automation).
-        'fcos-image-only' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\usb-prep.ps1') @extra }
-        'usb-prep' { & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'windows\usb-prep.ps1') @extra }
         default { throw "Unknown command: $name" }
     }
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -124,8 +119,6 @@ if ($svc.Exists) {
 } else {
     Write-Host '5) Install Windows service'
 }
-Write-Host '10) Download upstream FCOS base ISO only (no Ignition, no write)'
-Write-Host '11) FCOS full prep via WSL (optional Ignition + optional direct write)'
 Write-Host '0) Exit'
 $choice = Read-Host 'Select option'
 
@@ -149,26 +142,6 @@ switch ($choice) {
         } else {
             throw 'Invalid option'
         }
-    }
-    '10' { Invoke-Tool 'fcos-download-base-image' @() }
-    '11' {
-        $args = @()
-        $defaultIgnition = '.\infra\fcos\generated\config.ign'
-        $ignPrompt = "Ignition path (blank = use $defaultIgnition if present; none if absent)"
-        $ignitionPath = Read-Host $ignPrompt
-        if ([string]::IsNullOrWhiteSpace($ignitionPath) -and (Test-Path $defaultIgnition)) {
-            $ignitionPath = $defaultIgnition
-        }
-        if (-not [string]::IsNullOrWhiteSpace($ignitionPath)) {
-            $args += @('-IgnitionPath', $ignitionPath)
-        }
-
-        $device = Read-Host 'Direct USB write device in WSL (blank = image only, e.g. /dev/sdX to write)'
-        if (-not [string]::IsNullOrWhiteSpace($device)) {
-            $args += @('-Device', $device)
-        }
-
-        Invoke-Tool 'fcos-full-prep' $args
     }
     '0' { exit 0 }
     default { throw 'Invalid option' }

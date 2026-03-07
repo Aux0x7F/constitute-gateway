@@ -1,34 +1,14 @@
 # Operations
 
 ## Runtime Targets
-- Fedora CoreOS (preferred immutable baseline)
-- Linux VPS or container host (systemd)
+- Linux host (systemd)
 - Windows service host
 
 ## Entry Scripts
-- Linux and FCOS: `./scripts/run.sh`
+- Linux: `./scripts/run.sh`
 - Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1`
 
 ## Install and Update
-## Operator Utility (Preferred Installer UX)
-Release assets include a native installer utility:
-- `constitute-operator-windows.zip`
-- `constitute-operator-linux-amd64.tar.gz`
-
-Run with GUI:
-- Windows: `constitute-operator.exe --gui`
-- Linux: `./constitute-operator --gui`
-
-Run with CLI:
-- Linux image: `constitute-operator linux-image --help`
-- Windows service: `constitute-operator windows-service --help`
-
-Default behavior consumes `releases/latest`. Dev source mode is explicit (`--dev-source`).
-
-### Linux opinionated baseline deploy
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/deploy-opinionated.sh | bash
-```
 
 ### Linux release install/update
 ```bash
@@ -40,41 +20,39 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scr
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --timer-interval 30m
 ```
 
-### Linux rapid polling (development only)
+### Linux rapid polling (development release testing)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --dev-poll
 ```
 
-### Linux source-tracked install/update (development branch)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --dev-source --dev-branch main --setup-timer --dev-poll
-```
-
-Notes:
-- `--dev-source` clones/pulls and builds from branch instead of consuming `releases/latest`.
-- Requires `git` + `cargo` on the host used for updates.
-
 ### Windows release install/update
-- Script path: `scripts/windows/install-latest.ps1`
-- Default bundle path: `%ProgramData%\Constitute\Gateway\bundle`
-- Auto-update: registers a Windows Scheduled Task (`<ServiceName>-AutoUpdate`) polling `releases/latest` every 30 minutes by default
-
-### Windows source-tracked install/update (development branch)
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\windows\install-latest.ps1 -DevSource -DevBranch main
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content))"
 ```
 
-Notes:
-- `-DevSource` clones/pulls branch HEAD and builds locally before updating the service.
-- Requires `git` + `cargo` on the host used for updates.
+Windows defaults:
+- Bundle path: `%ProgramData%\Constitute\Gateway\bundle`
+- Auto-update task: `<ServiceName>-AutoUpdate` (30 minute default interval)
 
-Release source model:
-- Hosts consume `releases/latest` assets by default.
-- `--dev-source` hosts follow branch HEAD and build locally.
-- Merges to `main` do not update release-tracked hosts until a tagged release is published.
+## Development Install (One-Liner)
+### Fedora Server / Linux (clone + build + local service install)
+```bash
+curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-dev-local.sh | bash
+```
 
-Published runtime metadata:
-- Gateway advertises `serviceVersion`, `releaseChannel`, `releaseTrack`, and `releaseBranch` in discovery records and zone presence.
+## Development Install (Local Build)
+
+### Linux local build + service install
+```bash
+cargo build --release --features platform-linux
+sudo ./scripts/linux/install-service.sh --binary ./target/release/constitute-gateway --config-template ./config.example.json
+```
+
+### Windows local build + service install
+```powershell
+cargo build --release --features platform-windows -j 1
+powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-service.ps1 -ServiceName ConstituteGateway
+```
 
 ## Service Lifecycle
 ### Linux
@@ -92,14 +70,6 @@ Published runtime metadata:
 - Uninstall registration: `powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1 service-uninstall`
 
 Uninstall removes service registration only. Binaries, config, and data are retained.
-
-## FCOS Operations
-- Full FCOS runbook: [`docs/FCOS.md`](FCOS.md)
-- Infra template reference: [`infra/fcos/README.md`](../infra/fcos/README.md)
-
-Runner labels:
-- Base image only: `fcos-download-base-image`
-- Full prep: `fcos-full-prep`
 
 ## Update Egress Profiles
 Linux updater supports:
@@ -136,16 +106,6 @@ Baseline guidance:
 ## TURN Boundary
 - Gateway does not host TURN.
 - TURN remains an operator/client concern for browser-side connectivity fallback.
-
-## End-to-End Lab Smoke (Gateway + NVR + Web)
-1. Boot/install gateway host (FCOS flow or Linux install) and verify service is running.
-2. In `constitute` web shell (`Settings > Appliances`), download installer utility, run it on the operator host, and complete target selection + pairing bootstrap in the utility.
-3. Wait for gateway to appear as owned appliance in web UI.
-4. In the same Appliances panel, on that gateway row select `Install NVR Service`.
-5. Web publishes `gateway_service_install_request`; gateway executes NVR installer locally and emits `gateway_service_install_status` (`accepted|started|complete|failed|rejected`).
-6. Confirm NVR appears in Appliances; open `Security Cameras` app.
-7. In NVR config enable Reolink auto-provision (`autoprovision.reolink_enabled=true` with credentials) and restart NVR.
-8. Verify cameras appear in `list_sources` and segments are retrievable from UI.
 
 ## Verification Checklist
 - Service is installed and active (or intentionally stopped).

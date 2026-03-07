@@ -3,9 +3,9 @@ param(
     [string]$RepoName = 'constitute-gateway',
     [string]$ServiceName = 'ConstituteGateway',
     [string]$InstallDir = '',
-    [switch]$DevSource,
-    [string]$DevBranch = 'main',
-    [string]$DevSourceDir = '',
+    [string]$PairIdentity = '',
+    [string]$PairCode = '',
+    [string]$PairCodeHash = '',
     [int]$UpdateIntervalMinutes = 30,
     [string]$UpdateTaskName = '',
     [switch]$SkipUpdateTask
@@ -29,10 +29,7 @@ function Ensure-UpdateTask {
         [string]$RepoOwner,
         [string]$RepoName,
         [string]$ServiceName,
-        [string]$InstallDir,
-        [bool]$DevSourceMode,
-        [string]$DevBranch,
-        [string]$DevSourceDir
+        [string]$InstallDir
     )
 
     if (-not (Get-Command Register-ScheduledTask -ErrorAction SilentlyContinue)) {
@@ -52,12 +49,6 @@ function Ensure-UpdateTask {
         '-UpdateTaskName', "`"$TaskName`""
     )
 
-    if ($DevSourceMode) {
-        $taskArgs += @('-DevSource')
-        $taskArgs += @('-DevBranch', "`"$DevBranch`"")
-        $taskArgs += @('-DevSourceDir', "`"$DevSourceDir`"")
-    }
-
     $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ($taskArgs -join ' ')
     $trigger = New-ScheduledTaskTrigger -Once -At ((Get-Date).AddMinutes(2)) `
         -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes) `
@@ -76,7 +67,7 @@ function Ensure-UpdateTask {
         -Settings $settings `
         -User 'SYSTEM' `
         -RunLevel Highest `
-        -Description 'Constitute Gateway auto-update (release or dev-source)' `
+        -Description 'Constitute Gateway auto-update (release channel)' `
         -Force | Out-Null
 
     Write-Host "Auto-update task configured: $TaskName (every $IntervalMinutes minutes)"
@@ -112,95 +103,14 @@ function Set-ReleaseMetadata {
     }
 }
 
-if ($DevSource -and [string]::IsNullOrWhiteSpace($DevSourceDir)) {
-    if ($env:ProgramData) {
-        $DevSourceDir = Join-Path $env:ProgramData 'Constitute\Gateway\source'
-    } elseif ($env:LOCALAPPDATA) {
-        $DevSourceDir = Join-Path $env:LOCALAPPDATA 'Constitute\Gateway\source'
-    } else {
-        throw 'Unable to determine default source directory'
-    }
-}
-if ($DevSource -and [string]::IsNullOrWhiteSpace($DevSourceDir)) {
-    $DevSourceDir = $InstallDir
-}
-
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
-    if ($DevSource) {
-        $InstallDir = $DevSourceDir
-    } elseif ($env:ProgramData) {
+    if ($env:ProgramData) {
         $InstallDir = Join-Path $env:ProgramData 'Constitute\Gateway\bundle'
     } elseif ($env:LOCALAPPDATA) {
         $InstallDir = Join-Path $env:LOCALAPPDATA 'Constitute\Gateway\bundle'
     } else {
         throw 'Unable to determine default install directory'
     }
-}
-
-if ($DevSource) {
-    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        throw 'git is required for -DevSource'
-    }
-    if (-not (Get-Command cargo -ErrorAction SilentlyContinue)) {
-        throw 'cargo is required for -DevSource'
-    }
-
-    New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-    if (-not (Test-Path (Join-Path $InstallDir '.git'))) {
-        & git clone "https://github.com/$RepoOwner/$RepoName.git" $InstallDir
-        if ($LASTEXITCODE -ne 0) { throw "git clone failed with exit code $LASTEXITCODE" }
-    }
-
-    & git -C $InstallDir fetch --prune origin
-    if ($LASTEXITCODE -ne 0) { throw "git fetch failed with exit code $LASTEXITCODE" }
-    & git -C $InstallDir checkout $DevBranch
-    if ($LASTEXITCODE -ne 0) { throw "git checkout $DevBranch failed with exit code $LASTEXITCODE" }
-    & git -C $InstallDir reset --hard "origin/$DevBranch"
-    if ($LASTEXITCODE -ne 0) { throw "git reset origin/$DevBranch failed with exit code $LASTEXITCODE" }
-
-    Push-Location $InstallDir
-    try {
-        cargo build --release --features platform-windows -j 1
-        if ($LASTEXITCODE -ne 0) {
-            throw 'cargo build failed for dev-source install'
-        }
-    } finally {
-        Pop-Location
-    }
-
-    $devInstallService = Join-Path $InstallDir 'scripts\windows\install-service.ps1'
-    if (-not (Test-Path $devInstallService)) {
-        throw "install-service.ps1 missing in dev source checkout: $devInstallService"
-    }
-
-    & powershell -ExecutionPolicy Bypass -File $devInstallService -ServiceName $ServiceName
-    if ($LASTEXITCODE -ne 0) {
-        throw "install-service.ps1 failed with exit code $LASTEXITCODE"
-    }
-
-    $installedConfig = Join-Path $InstallDir 'config.json'
-    Set-ReleaseMetadata -ConfigPath $installedConfig -Channel 'dev-source' -Track $DevBranch -Branch $DevBranch
-
-    if (-not $SkipUpdateTask) {
-        $installedScript = Join-Path $InstallDir 'scripts\windows\install-latest.ps1'
-        if (-not (Test-Path $installedScript)) {
-            throw 'install-latest.ps1 not found in dev source checkout; cannot configure auto-update task'
-        }
-        Ensure-UpdateTask `
-            -TaskName $UpdateTaskName `
-            -IntervalMinutes $UpdateIntervalMinutes `
-            -ScriptPath $installedScript `
-            -RepoOwner $RepoOwner `
-            -RepoName $RepoName `
-            -ServiceName $ServiceName `
-            -InstallDir $InstallDir `
-            -DevSourceMode $true `
-            -DevBranch $DevBranch `
-            -DevSourceDir $InstallDir
-    }
-
-    Write-Host "Install/update complete: $ServiceName ($InstallDir, dev-source branch $DevBranch)"
-    exit 0
 }
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("constitute-gateway-install-" + [Guid]::NewGuid().ToString('N'))
@@ -228,7 +138,7 @@ try {
 
     $skipInstall = $false
     $installedBinary = Join-Path $InstallDir 'constitute-gateway.exe'
-    if ((Test-Path $installedBinary) -and (Service-Exists -Name $ServiceName)) {
+    if ((Test-Path $installedBinary) -and (Service-Exists -Name $ServiceName) -and (-not $PairIdentity) -and (-not $PairCode) -and (-not $PairCodeHash)) {
         $currentHash = (Get-FileHash $installedBinary -Algorithm SHA256).Hash.ToLower()
         $bundleHash = (Get-FileHash $bundleBinary -Algorithm SHA256).Hash.ToLower()
         if ($currentHash -eq $bundleHash) {
@@ -244,7 +154,12 @@ try {
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         Copy-Item -Recurse -Force (Join-Path $extractDir '*') $InstallDir
 
-        & powershell -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\windows\install-service.ps1') -ServiceName $ServiceName
+        $serviceArgs = @('-ServiceName', $ServiceName)
+        if (-not [string]::IsNullOrWhiteSpace($PairIdentity)) { $serviceArgs += @('-PairIdentity', $PairIdentity) }
+        if (-not [string]::IsNullOrWhiteSpace($PairCode)) { $serviceArgs += @('-PairCode', $PairCode) }
+        if (-not [string]::IsNullOrWhiteSpace($PairCodeHash)) { $serviceArgs += @('-PairCodeHash', $PairCodeHash) }
+
+        & powershell -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\windows\install-service.ps1') @serviceArgs
         if ($LASTEXITCODE -ne 0) {
             throw "install-service.ps1 failed with exit code $LASTEXITCODE"
         }
@@ -265,10 +180,7 @@ try {
             -RepoOwner $RepoOwner `
             -RepoName $RepoName `
             -ServiceName $ServiceName `
-            -InstallDir $InstallDir `
-            -DevSourceMode $false `
-            -DevBranch '' `
-            -DevSourceDir ''
+            -InstallDir $InstallDir
     }
 
     Write-Host "Install/update complete: $ServiceName ($InstallDir)"

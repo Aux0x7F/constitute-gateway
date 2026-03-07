@@ -15,7 +15,7 @@ Rationale:
 ## Current Snapshot
 - Gateway: core discovery, app-channel bridge, zone-scoped UDP/DHT path, and optional QUIC mesh path implemented.
 - Web convergence: partial; parity work remains.
-- NVR: not started in this repository (future sibling service repository).
+- NVR: service installation/status contract implemented in gateway; broader integration remains in sibling repos.
 
 ## Phase Plan
 
@@ -63,23 +63,15 @@ Exit criteria:
 ## Near-Term Priority Order
 1. finish gateway parity gaps called out in `ARCHITECTURE.md`
 2. execute web convergence pass
-3. start `constitute-nvr` scaffolding and capability advertisements
+3. continue `constitute-nvr` integration against converged contracts
 
-## Iteration-1 Handoff Status
-Gateway iteration-1 is considered handoff-ready for web catch-up when the following are true:
-- contract docs are frozen for current behavior (`docs/PROTOCOL.md`)
-- CI is green on Linux and Windows build/test lanes
-- gateway app-channel flows are verified by tests (`swarm_record_request`, `swarm_dht_put/get`)
-- role publication model is extensible and backward compatible
-
-Current disposition:
-- Handoff-ready for web catch-up once PR #12 is merged; transport/fallback/auth-boundary blocker slices (#9/#10/#11) are implemented and test-backed.
-- Longer-running operator host validation (real deployment environment soak checks) remains tracked as non-blocking follow-up issue #7.
+## Install/Deploy Model (Current)
+- No repository-managed OS image/media generation path.
+- Dev: clone repository, build locally, install service locally.
+- Release: install/update service from tagged release artifacts.
 
 ## Estimation Guidance
 To account for offline human intervals and review latency:
 - apply a 1.5x to 2.0x calendar buffer to implementation estimates
 - split work into issue-sized slices that each close within 1-3 focused sessions
 - prefer milestone-level target dates over single-day deadlines for integration-heavy phases
-
-

@@ -21,7 +21,7 @@ jobs:
       - name: Build (Linux)
         run: |
           cargo build --release --bin constitute-gateway --features platform-linux
-          cargo build --release --bin constitute-operator --features platform-linux,operator-gui
+          cargo build --release --bin constitute-operator --features platform-linux
 
       - name: Package Linux artifact
         run: bash scripts/linux/package.sh
@@ -49,7 +49,7 @@ jobs:
       - name: Build (Windows)
         run: |
           cargo build --release --bin constitute-gateway --features platform-windows
-          cargo build --release --bin constitute-operator --features platform-windows,operator-gui
+          cargo build --release --bin constitute-operator --features platform-windows
 
       - name: Download NSSM
         shell: pwsh

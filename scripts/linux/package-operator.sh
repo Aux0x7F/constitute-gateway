@@ -15,7 +15,7 @@ fi
 
 if [[ ! -f "$BIN_PATH" ]]; then
   echo "Binary not found: $BIN_PATH" >&2
-  echo "Build first: cargo build --release --bin constitute-operator --features platform-linux,operator-gui" >&2
+  echo "Build first: cargo build --release --bin constitute-operator --features platform-linux" >&2
   exit 1
 fi
 
@@ -30,11 +30,12 @@ cat > "$STAGE_DIR/README-operator.txt" <<'EOF'
 Constitute Operator Utility
 
 Linux usage:
-  ./constitute-operator --gui
-  ./constitute-operator linux-image --help
+  ./constitute-operator linux-service
+
+Windows usage (from Windows package):
+  constitute-operator.exe windows-service
 
 Default mode uses releases/latest.
-Enable --dev-source only for local development loops.
 EOF
 
 rm -f "$artifact_path"

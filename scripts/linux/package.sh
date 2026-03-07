@@ -5,7 +5,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 BIN_PATH="${BIN_PATH:-$REPO_ROOT/target/release/constitute-gateway}"
-OPERATOR_BIN_PATH="${OPERATOR_BIN_PATH:-$REPO_ROOT/target/release/constitute-operator}"
 ARTIFACT_NAME="${ARTIFACT_NAME:-constitute-gateway-linux-amd64.tar.gz}"
 STAGE_DIR="${STAGE_DIR:-$REPO_ROOT/dist/linux}"
 
@@ -20,17 +19,10 @@ if [[ ! -f "$BIN_PATH" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$OPERATOR_BIN_PATH" ]]; then
-  echo "Operator binary not found: $OPERATOR_BIN_PATH" >&2
-  echo "Build first: cargo build --release --bin constitute-operator --features platform-linux,operator-gui" >&2
-  exit 1
-fi
-
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR"
 
 install -m 0755 "$BIN_PATH" "$STAGE_DIR/constitute-gateway"
-install -m 0755 "$OPERATOR_BIN_PATH" "$STAGE_DIR/constitute-operator"
 install -m 0644 "$REPO_ROOT/config.example.json" "$STAGE_DIR/config.example.json"
 install -m 0644 "$REPO_ROOT/README.md" "$STAGE_DIR/README.md"
 cp -R "$REPO_ROOT/scripts" "$STAGE_DIR/scripts"

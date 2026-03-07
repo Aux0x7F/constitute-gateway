@@ -14,8 +14,9 @@ Audit host hardening posture and optionally apply minimal, safe changes.
 
 Defaults:
   - Audit-only (no changes) unless --apply is set.
-  - Only adjusts UFW rules if UFW is already active.
-  - Does not enable/disable services or overwrite existing configs.
+  - Only adjusts host firewall rules when an active firewall service is detected.
+  - Supports UFW (Debian/Ubuntu) and firewalld (Fedora/RHEL).
+  - Does not enable/disable firewall services or overwrite existing configs.
 
 Examples:
   ./scripts/linux/harden-host.sh
@@ -36,49 +37,118 @@ done
 
 log() { echo "[harden] $*"; }
 
+run_sudo() {
+  if [[ "$(id -u)" -eq 0 ]]; then
+    "$@"
+  else
+    sudo "$@"
+  fi
+}
+
+apply_ufw() {
+  local changed=0
+  if [[ -n "$UDP_PORT" ]]; then
+    if ! ufw status | grep -q "${UDP_PORT}/udp"; then
+      log "allowing UDP ${UDP_PORT} (swarm)"
+      run_sudo ufw allow "${UDP_PORT}/udp" comment "constitute-gateway swarm" >/dev/null
+      changed=1
+    else
+      log "udp ${UDP_PORT} already allowed"
+    fi
+  fi
+  if [[ -n "$WS_PORT" ]]; then
+    if ! ufw status | grep -q "${WS_PORT}/tcp"; then
+      log "allowing TCP ${WS_PORT} (relay ws)"
+      run_sudo ufw allow "${WS_PORT}/tcp" comment "constitute-gateway relay ws" >/dev/null
+      changed=1
+    else
+      log "tcp ${WS_PORT} already allowed"
+    fi
+  fi
+  if [[ -n "$WSS_PORT" ]]; then
+    if ! ufw status | grep -q "${WSS_PORT}/tcp"; then
+      log "allowing TCP ${WSS_PORT} (relay wss)"
+      run_sudo ufw allow "${WSS_PORT}/tcp" comment "constitute-gateway relay wss" >/dev/null
+      changed=1
+    else
+      log "tcp ${WSS_PORT} already allowed"
+    fi
+  fi
+  return $changed
+}
+
+firewalld_has_port() {
+  local port_proto="$1"
+  firewall-cmd --quiet --query-port "$port_proto"
+}
+
+apply_firewalld() {
+  local changed=0
+  if [[ -n "$UDP_PORT" ]]; then
+    if ! firewalld_has_port "${UDP_PORT}/udp"; then
+      log "allowing UDP ${UDP_PORT} (swarm)"
+      run_sudo firewall-cmd --permanent --add-port="${UDP_PORT}/udp" >/dev/null
+      changed=1
+    else
+      log "udp ${UDP_PORT} already allowed"
+    fi
+  fi
+  if [[ -n "$WS_PORT" ]]; then
+    if ! firewalld_has_port "${WS_PORT}/tcp"; then
+      log "allowing TCP ${WS_PORT} (relay ws)"
+      run_sudo firewall-cmd --permanent --add-port="${WS_PORT}/tcp" >/dev/null
+      changed=1
+    else
+      log "tcp ${WS_PORT} already allowed"
+    fi
+  fi
+  if [[ -n "$WSS_PORT" ]]; then
+    if ! firewalld_has_port "${WSS_PORT}/tcp"; then
+      log "allowing TCP ${WSS_PORT} (relay wss)"
+      run_sudo firewall-cmd --permanent --add-port="${WSS_PORT}/tcp" >/dev/null
+      changed=1
+    else
+      log "tcp ${WSS_PORT} already allowed"
+    fi
+  fi
+
+  if [[ "$changed" -eq 1 ]]; then
+    run_sudo firewall-cmd --reload >/dev/null
+  fi
+  return $changed
+}
+
 ufw_exists=0
 if command -v ufw >/dev/null 2>&1; then
   ufw_exists=1
-else
-  log "ufw not installed"
-fi
-
-if [[ "$ufw_exists" -eq 1 ]]; then
   ufw_status="$(ufw status 2>/dev/null | head -n 1 || true)"
   log "ufw status: ${ufw_status:-unknown}"
   if [[ "$ufw_status" =~ active ]]; then
-    log "ufw is active"
     if [[ "$APPLY" -eq 1 ]]; then
-      if [[ -n "$UDP_PORT" ]]; then
-        if ! ufw status | grep -q "${UDP_PORT}/udp"; then
-          log "allowing UDP ${UDP_PORT} (swarm)"
-          ufw allow "${UDP_PORT}/udp" comment "constitute-gateway swarm" >/dev/null
-        else
-          log "udp ${UDP_PORT} already allowed"
-        fi
-      fi
-      if [[ -n "$WS_PORT" ]]; then
-        if ! ufw status | grep -q "${WS_PORT}/tcp"; then
-          log "allowing TCP ${WS_PORT} (relay ws)"
-          ufw allow "${WS_PORT}/tcp" comment "constitute-gateway relay ws" >/dev/null
-        else
-          log "tcp ${WS_PORT} already allowed"
-        fi
-      fi
-      if [[ -n "$WSS_PORT" ]]; then
-        if ! ufw status | grep -q "${WSS_PORT}/tcp"; then
-          log "allowing TCP ${WSS_PORT} (relay wss)"
-          ufw allow "${WSS_PORT}/tcp" comment "constitute-gateway relay wss" >/dev/null
-        else
-          log "tcp ${WSS_PORT} already allowed"
-        fi
-      fi
+      apply_ufw || true
     else
       log "ufw active; run with --apply to add allow rules for gateway ports"
     fi
   else
-    log "ufw installed but inactive (no changes). Consider enabling ufw and allowing gateway ports."
+    log "ufw installed but inactive (no changes)."
   fi
+else
+  log "ufw not installed"
+fi
+
+if command -v firewall-cmd >/dev/null 2>&1; then
+  if systemctl is-active --quiet firewalld; then
+    log "firewalld is active"
+    if [[ "$APPLY" -eq 1 ]]; then
+      apply_firewalld || true
+    else
+      log "firewalld active; run with --apply to add allow rules for gateway ports"
+    fi
+  else
+    log "firewalld installed but inactive (no changes)"
+  fi
+else
+  log "firewalld not installed"
 fi
 
 if command -v fail2ban-client >/dev/null 2>&1; then
@@ -97,4 +167,3 @@ else
 fi
 
 log "done"
-

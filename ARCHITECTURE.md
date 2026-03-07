@@ -81,13 +81,13 @@ Planned model:
 - Optional no-clearnet mode where release payloads arrive via trusted network peers.
 
 ## Host Baseline and Hardening
-Preferred host baseline:
-- Fedora CoreOS with first-boot provisioning (Ignition/Butane)
+Baseline:
+- Linux or Windows host managed by operator.
+- No repository-managed OS image/media build path.
 
 Operational hardening:
 - Bounded firewall rules for explicit ports only
-- Systemd service limits and restart policy
-- Non-root runtime where feasible
+- Systemd service limits and restart policy (Linux)
 - Minimal logging by default
 
 ## Threat Model
@@ -131,8 +131,7 @@ Execution order:
 - [x] TURN/gateway role boundaries documented (browser TURN remains client-side fallback)
 
 ### Phase 2: Host and Service Hardening
-- [x] FCOS first-boot bootstrap scaffold
-- [x] Operator-managed update timer path
+- [x] Operator-managed release update timer path
 - [ ] Signature-verified release payload enforcement
 - [ ] Non-root runtime hardening profile completion
 
@@ -152,5 +151,3 @@ Execution order:
 - `docs/ROADMAP.md`
 - `docs/OPERATIONS.md`
 - `docs/DEVELOPMENT.md`
-- `docs/FCOS.md`
-- `infra/fcos/README.md`

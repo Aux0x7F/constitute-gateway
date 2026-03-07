@@ -19,7 +19,3 @@ config.json
 keystore.json
 keystore.key
 zone.seed
-
-# Generated FCOS artifacts
-/infra/fcos/generated/*
-!/infra/fcos/generated/.gitkeep

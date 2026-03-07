@@ -563,7 +563,7 @@ async fn main() -> Result<()> {
         "stun/turn config"
     );
     info!(relays = advertise_relays.len(), "advertised relays");
-    info!("build target is intended for Linux hosts (FCOS/minimal/server)");
+    info!("build target is intended for Linux hosts");
 
     platform::init();
 

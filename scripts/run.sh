@@ -81,30 +81,16 @@ run_cmd() {
   case "$cmd" in
     build-linux) "$SCRIPT_DIR/linux/build.sh" linux "$@" ;;
     install-linux) "$SCRIPT_DIR/linux/install-latest.sh" "$@" ;;
+    install-linux-fast-poll) "$SCRIPT_DIR/linux/install-latest.sh" --setup-timer --dev-poll "$@" ;;
     deploy-linux-opinionated) "$SCRIPT_DIR/linux/deploy-opinionated.sh" "$@" ;;
-    install-linux-dev) "$SCRIPT_DIR/linux/install-latest.sh" --setup-timer --dev-poll "$@" ;;
-    render-fcos) "$SCRIPT_DIR/fcos/render-config.sh" "$@" ;;
-    bootstrap-fcos) "$SCRIPT_DIR/fcos/firstboot-bootstrap.sh" "$@" ;;
     harden-audit) "$SCRIPT_DIR/linux/harden-host.sh" "$@" ;;
     harden-apply) "$SCRIPT_DIR/linux/harden-host.sh" --apply "$@" ;;
     systemd-override) "$SCRIPT_DIR/linux/install-systemd-override.sh" "$@" ;;
-    fcos-download-base-image) "$SCRIPT_DIR/fcos/usb-prep-linux.sh" "$@" ;;
-    fcos-full-prep)
-      local default_ign="$SCRIPT_DIR/../infra/fcos/generated/config.ign"
-      if [[ " $* " != *" --ignition "* && -f "$default_ign" ]]; then
-        "$SCRIPT_DIR/fcos/usb-prep-linux.sh" --ignition "$default_ign" "$@"
-      else
-        "$SCRIPT_DIR/fcos/usb-prep-linux.sh" "$@"
-      fi
-      ;;
     service-status) service_action status ;;
     service-start) service_action start ;;
     service-stop) service_action stop ;;
     service-restart) service_action restart ;;
     service-uninstall) service_action uninstall ;;
-    # Compatibility aliases (kept for existing automation).
-    fcos-image-only) "$SCRIPT_DIR/fcos/usb-prep-linux.sh" "$@" ;;
-    image-prep) "$SCRIPT_DIR/fcos/usb-prep-linux.sh" "$@" ;;
     help)
       cat <<'EOF'
 Usage: scripts/run.sh [command] [args]
@@ -112,24 +98,16 @@ Usage: scripts/run.sh [command] [args]
 Commands:
   build-linux
   install-linux
+  install-linux-fast-poll
   deploy-linux-opinionated
-  install-linux-dev
-  render-fcos
-  bootstrap-fcos
   harden-audit
   harden-apply
   systemd-override
-  fcos-download-base-image
-  fcos-full-prep
   service-status
   service-start
   service-stop
   service-restart
   service-uninstall
-
-Compatibility aliases:
-  fcos-image-only
-  image-prep
 EOF
       ;;
     *)
@@ -161,44 +139,34 @@ fi
 
 svc_state="$(service_status_text)"
 
-echo "Constitute Gateway Script Runner (Linux/FCOS)"
+echo "Constitute Gateway Script Runner (Linux)"
 echo "Service '$SERVICE_UNIT': $svc_state"
 echo "1) Build"
-if [[ "$svc_state" == "NotInstalled" || "$svc_state" == "NoSystemd" ]]; then
-  echo "2) Install gateway (latest release)"
-else
-  echo "2) Update gateway (latest release)"
-fi
-echo "3) Install/update gateway (dev poll)"
-echo "4) Render FCOS config"
-echo "5) Run FCOS firstboot bootstrap on this host"
-echo "6) Host hardening audit"
-echo "7) Host hardening apply"
-echo "8) Install systemd CPU override"
+echo "2) Install/update from latest release"
+echo "3) Install/update + fast dev poll timer"
+echo "4) Host hardening audit"
+echo "5) Host hardening apply"
+echo "6) Install systemd CPU override"
 if [[ "$svc_state" != "NoSystemd" ]]; then
   if [[ "$svc_state" == "NotInstalled" ]]; then
-    echo "9) Service install/update (latest release)"
+    echo "7) Service install/update (latest release)"
   else
-    echo "9) Service status"
-    echo "10) Service start"
-    echo "11) Service stop"
-    echo "12) Service restart"
-    echo "13) Service uninstall"
+    echo "7) Service status"
+    echo "8) Service start"
+    echo "9) Service stop"
+    echo "10) Service restart"
+    echo "11) Service uninstall"
   fi
 fi
-echo "14) Download upstream FCOS base ISO only (no Ignition, no write)"
-echo "15) FCOS full prep (default Ignition if present; optional direct write)"
 echo "0) Exit"
 read -r -p "Select option: " opt
 
 case "$opt" in
   1) show_build_menu ;;
   2) run_cmd install-linux ;;
-  3) run_cmd install-linux-dev ;;
-  4) run_cmd render-fcos ;;
-  5) run_cmd bootstrap-fcos ;;
-  6) run_cmd harden-audit ;;
-  7)
+  3) run_cmd install-linux-fast-poll ;;
+  4) run_cmd harden-audit ;;
+  5)
     read -r -p "UDP port (blank skip): " udp
     read -r -p "WS port (blank skip): " ws
     read -r -p "WSS port (blank skip): " wss
@@ -208,8 +176,8 @@ case "$opt" in
     [[ -n "$wss" ]] && args+=(--wss "$wss")
     run_cmd harden-apply "${args[@]}"
     ;;
-  8) run_cmd systemd-override --restart ;;
-  9)
+  6) run_cmd systemd-override --restart ;;
+  7)
     if [[ "$svc_state" == "NotInstalled" ]]; then
       run_cmd install-linux
     elif [[ "$svc_state" != "NoSystemd" ]]; then
@@ -219,7 +187,7 @@ case "$opt" in
       exit 1
     fi
     ;;
-  10)
+  8)
     if [[ "$svc_state" != "NotInstalled" && "$svc_state" != "NoSystemd" ]]; then
       run_cmd service-start
     else
@@ -227,7 +195,7 @@ case "$opt" in
       exit 1
     fi
     ;;
-  11)
+  9)
     if [[ "$svc_state" != "NotInstalled" && "$svc_state" != "NoSystemd" ]]; then
       run_cmd service-stop
     else
@@ -235,7 +203,7 @@ case "$opt" in
       exit 1
     fi
     ;;
-  12)
+  10)
     if [[ "$svc_state" != "NotInstalled" && "$svc_state" != "NoSystemd" ]]; then
       run_cmd service-restart
     else
@@ -243,7 +211,7 @@ case "$opt" in
       exit 1
     fi
     ;;
-  13)
+  11)
     if [[ "$svc_state" != "NotInstalled" && "$svc_state" != "NoSystemd" ]]; then
       read -r -p "Type YES to uninstall $SERVICE_UNIT: " confirm
       if [[ "$confirm" == "YES" ]]; then
@@ -255,15 +223,6 @@ case "$opt" in
       echo "Invalid option"
       exit 1
     fi
-    ;;
-  14) run_cmd fcos-download-base-image ;;
-  15)
-    read -r -p "Ignition path override (blank = default if present): " ign
-    read -r -p "Write directly to USB device? (blank for image-only): " dev
-    args=()
-    [[ -n "$ign" ]] && args+=(--ignition "$ign")
-    [[ -n "$dev" ]] && args+=(--device "$dev")
-    run_cmd fcos-full-prep "${args[@]}"
     ;;
   0) exit 0 ;;
   *) echo "Invalid option"; exit 1 ;;

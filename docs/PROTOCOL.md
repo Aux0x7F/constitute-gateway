@@ -44,9 +44,9 @@ Content fields:
 - `relays` (array, optional)
 - `hostPlatform` (optional; `linux`, `windows`, or `unknown`)
 - `serviceVersion` (required)
-- `releaseChannel` (optional; `release` or `dev-source`)
-- `releaseTrack` (optional; `latest` or branch name)
-- `releaseBranch` (optional; non-empty for source-tracked installs)
+- `releaseChannel` (optional; `release` or `dev`)
+- `releaseTrack` (optional; `latest` or custom track)
+- `releaseBranch` (optional; branch name for local/dev installs)
 
 ### 2) Zone Presence
 Signed Nostr event:
@@ -64,9 +64,9 @@ Content fields:
 - `relays` (array, optional)
 - `hostPlatform` (optional; `linux`, `windows`, or `unknown`)
 - `serviceVersion` (required)
-- `releaseChannel` (optional; `release` or `dev-source`)
-- `releaseTrack` (optional; `latest` or branch name)
-- `releaseBranch` (optional; non-empty for source-tracked installs)
+- `releaseChannel` (optional; `release` or `dev`)
+- `releaseTrack` (optional; `latest` or custom track)
+- `releaseBranch` (optional; branch name for local/dev installs)
 - `metrics` (optional)
 - `ts` (required, ms)
 - `ttl` (required, seconds)

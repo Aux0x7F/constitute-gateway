@@ -9,7 +9,7 @@ compile_error!("features platform-linux and platform-windows are mutually exclus
 
 #[cfg(feature = "platform-linux")]
 pub fn init() {
-    tracing::info!("platform init: linux (generic/fcos)");
+    tracing::info!("platform init: linux");
 }
 
 #[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
