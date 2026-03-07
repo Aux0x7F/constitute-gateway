@@ -31,6 +31,10 @@ In progress:
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash
 ```
 
+Linux installer defaults:
+- Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
+- Service runtime user: `constitute-gateway` (system user).
+
 ### Windows service (install/update from releases/latest)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content))"

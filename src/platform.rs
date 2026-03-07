@@ -24,7 +24,11 @@ pub fn init() {
 
 #[cfg(feature = "platform-linux")]
 pub fn default_data_dir() -> String {
-    "/var/lib/constitute-gateway/data".to_string()
+    if std::path::Path::new("/data").is_dir() {
+        "/data/constitute-gateway/data".to_string()
+    } else {
+        "/var/lib/constitute-gateway/data".to_string()
+    }
 }
 
 #[cfg(all(feature = "platform-windows", not(feature = "platform-linux")))]
@@ -55,7 +59,6 @@ pub fn default_config_path() -> PathBuf {
 pub fn default_config_path() -> PathBuf {
     "./config.json".into()
 }
-
 
 #[cfg(feature = "platform-linux")]
 pub fn runtime_platform() -> &'static str {
