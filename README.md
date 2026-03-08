@@ -32,13 +32,23 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scr
 ```
 
 Linux installer defaults:
+- Config path: `/etc/constitute-gateway/config.json`
 - Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
 - Service runtime user: `constitute-gateway` (system user).
+- Update safety: updater preserves config/data and rolls back binary/config if post-update health check fails.
 
 ### Windows service (install/update from releases/latest)
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content))"
 ```
+
+Windows installer defaults:
+- State root: `%ProgramData%\Constitute\Gateway`
+- Config path: `%ProgramData%\Constitute\Gateway\config.json`
+- Data path: `%ProgramData%\Constitute\Gateway\data`
+- Bundle path: `%ProgramData%\Constitute\Gateway\bundle`
+- Auto-update task: `<ServiceName>-AutoUpdate` (30 minute default interval)
+- Update safety: bundle updates are non-destructive to state/config; config is backed up before reinstall.
 
 ## Development Install (One-Liner)
 ### Fedora Server / Linux (clone + build + install service locally)

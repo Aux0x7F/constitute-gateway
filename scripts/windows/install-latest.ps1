@@ -21,6 +21,16 @@ if ([string]::IsNullOrWhiteSpace($UpdateTaskName)) {
     $UpdateTaskName = "$ServiceName-AutoUpdate"
 }
 
+function Resolve-StateRoot {
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
+        return (Join-Path $env:ProgramData 'Constitute\Gateway')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:LOCALAPPDATA 'Constitute\Gateway')
+    }
+    throw 'Unable to determine persistent state root path'
+}
+
 function Ensure-UpdateTask {
     param(
         [string]$TaskName,
@@ -103,6 +113,17 @@ function Set-ReleaseMetadata {
     }
 }
 
+function Backup-Config {
+    param([string]$ConfigPath, [string]$StateRoot)
+    if (-not (Test-Path $ConfigPath)) { return '' }
+    $backupDir = Join-Path $StateRoot 'backups'
+    New-Item -ItemType Directory -Force -Path $backupDir | Out-Null
+    $stamp = Get-Date -Format 'yyyyMMddHHmmss'
+    $backupPath = Join-Path $backupDir "config.$stamp.json"
+    Copy-Item $ConfigPath $backupPath -Force
+    return $backupPath
+}
+
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     if ($env:ProgramData) {
         $InstallDir = Join-Path $env:ProgramData 'Constitute\Gateway\bundle'
@@ -112,6 +133,9 @@ if ([string]::IsNullOrWhiteSpace($InstallDir)) {
         throw 'Unable to determine default install directory'
     }
 }
+
+$stateRoot = Resolve-StateRoot
+$stateConfig = Join-Path $stateRoot 'config.json'
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("constitute-gateway-install-" + [Guid]::NewGuid().ToString('N'))
 try {
@@ -148,25 +172,46 @@ try {
     }
 
     if (-not $skipInstall) {
-        if (Test-Path $InstallDir) {
-            Remove-Item -Recurse -Force $InstallDir
-        }
+        $configBackup = Backup-Config -ConfigPath $stateConfig -StateRoot $stateRoot
+
         New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
         Copy-Item -Recurse -Force (Join-Path $extractDir '*') $InstallDir
 
-        $serviceArgs = @('-ServiceName', $ServiceName)
+        $serviceArgs = @(
+            '-ServiceName', $ServiceName,
+            '-StateRoot', $stateRoot,
+            '-ConfigPath', $stateConfig
+        )
         if (-not [string]::IsNullOrWhiteSpace($PairIdentity)) { $serviceArgs += @('-PairIdentity', $PairIdentity) }
         if (-not [string]::IsNullOrWhiteSpace($PairCode)) { $serviceArgs += @('-PairCode', $PairCode) }
         if (-not [string]::IsNullOrWhiteSpace($PairCodeHash)) { $serviceArgs += @('-PairCodeHash', $PairCodeHash) }
 
-        & powershell -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\windows\install-service.ps1') @serviceArgs
-        if ($LASTEXITCODE -ne 0) {
-            throw "install-service.ps1 failed with exit code $LASTEXITCODE"
+        try {
+            & powershell -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\windows\install-service.ps1') @serviceArgs
+            if ($LASTEXITCODE -ne 0) {
+                throw "install-service.ps1 failed with exit code $LASTEXITCODE"
+            }
+
+            $svc = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+            if ($svc) {
+                $deadline = (Get-Date).AddSeconds(20)
+                while ($svc.Status -ne 'Running' -and (Get-Date) -lt $deadline) {
+                    Start-Sleep -Seconds 1
+                    $svc.Refresh()
+                }
+                if ($svc.Status -ne 'Running') {
+                    throw "service $ServiceName not running after update"
+                }
+            }
+        } catch {
+            if (-not [string]::IsNullOrWhiteSpace($configBackup) -and (Test-Path $configBackup)) {
+                Copy-Item $configBackup $stateConfig -Force
+            }
+            throw
         }
     }
 
-    $installedConfig = Join-Path $InstallDir 'config.json'
-    Set-ReleaseMetadata -ConfigPath $installedConfig -Channel 'release' -Track 'latest' -Branch ''
+    Set-ReleaseMetadata -ConfigPath $stateConfig -Channel 'release' -Track 'latest' -Branch ''
 
     if (-not $SkipUpdateTask) {
         $installedScript = Join-Path $InstallDir 'scripts\windows\install-latest.ps1'

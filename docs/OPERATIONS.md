@@ -16,8 +16,10 @@ curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scr
 ```
 
 Linux defaults:
+- Config path: `/etc/constitute-gateway/config.json`
 - Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
 - Service user: `constitute-gateway` (system account).
+- Update rollback: installer restores previous binary/config if post-update health check fails.
 
 ### Linux periodic update timer (production)
 ```bash
@@ -35,8 +37,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create
 ```
 
 Windows defaults:
+- State root: `%ProgramData%\Constitute\Gateway`
+- Config path: `%ProgramData%\Constitute\Gateway\config.json`
+- Data path: `%ProgramData%\Constitute\Gateway\data`
 - Bundle path: `%ProgramData%\Constitute\Gateway\bundle`
 - Auto-update task: `<ServiceName>-AutoUpdate` (30 minute default interval)
+- Update behavior: bundle overwrite is non-destructive to state; config backup is taken before reinstall.
 
 ## Development Install (One-Liner)
 ### Fedora Server / Linux (clone + build + local service install)
@@ -82,6 +88,13 @@ Linux updater supports:
 - Tor SOCKS: `--tor --tor-socks <host:port>`
 - Optional Tor control: `--tor-control <host:port>`
 - Disable Tor circuit rotation retry: `--no-tor-rotate`
+
+
+## Persistence Contract
+- Identity/device keys and encrypted keystore live under configured `data_dir` and are never stored in release bundle paths.
+- Updaters may replace binaries/scripts only; they must not delete configured state roots.
+- Relative `data_dir` values are normalized to stable platform state roots during install/update.
+- Failed updates must leave service usable (rollback to previous binary/config).
 
 ## Host Hardening
 Automation scripts:

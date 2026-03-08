@@ -347,6 +347,30 @@ fi
 
 skip_install=0
 installed_bin="/usr/local/bin/constitute-gateway"
+installed_cfg="/etc/constitute-gateway/config.json"
+rollback_dir="$tmpdir/rollback"
+mkdir -p "$rollback_dir"
+
+if [[ -f "$installed_bin" ]]; then
+  cp -f "$installed_bin" "$rollback_dir/constitute-gateway.prev"
+fi
+if [[ -f "$installed_cfg" ]]; then
+  cp -f "$installed_cfg" "$rollback_dir/config.prev.json"
+fi
+
+rollback_install() {
+  echo "Update failed; attempting rollback..." >&2
+  if [[ -f "$rollback_dir/constitute-gateway.prev" ]]; then
+    run_sudo install -m 0755 "$rollback_dir/constitute-gateway.prev" "$installed_bin" || true
+  fi
+  if [[ -f "$rollback_dir/config.prev.json" ]]; then
+    run_sudo install -m 0644 "$rollback_dir/config.prev.json" "$installed_cfg" || true
+  fi
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^constitute-gateway\.service'; then
+    run_sudo systemctl restart constitute-gateway.service || true
+  fi
+}
+
 if [[ -z "$PAIR_IDENTITY" && -z "$PAIR_CODE" && -z "$PAIR_CODE_HASH" && -f "$installed_bin" ]]; then
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^constitute-gateway\.service'; then
     current_hash="$(sha256sum "$installed_bin" | awk '{print $1}')"
@@ -359,7 +383,18 @@ if [[ -z "$PAIR_IDENTITY" && -z "$PAIR_CODE" && -z "$PAIR_CODE_HASH" && -f "$ins
 fi
 
 if [[ "$skip_install" -eq 0 ]]; then
-  bash "$installer" "${installer_args[@]}"
+  if ! bash "$installer" "${installer_args[@]}"; then
+    rollback_install
+    exit 1
+  fi
+
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files | grep -q '^constitute-gateway\.service'; then
+    if ! run_sudo systemctl is-active --quiet constitute-gateway.service; then
+      rollback_install
+      echo "Gateway service is not active after update." >&2
+      exit 1
+    fi
+  fi
 fi
 
 patch_release_metadata "release" "latest" ""

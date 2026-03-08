@@ -1,13 +1,18 @@
 param(
     [string]$ServiceName = 'ConstituteGateway',
     [string]$NssmPath = '',
-    [string]$Zone = ''
+    [string]$Zone = '',
+    [string]$StateRoot = '',
+    [string]$ConfigPath = '',
+    [string]$PairIdentity = '',
+    [string]$PairCode = '',
+    [string]$PairCodeHash = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-$config = Join-Path $repo 'config.json'
 $configExample = Join-Path $repo 'config.example.json'
+$legacyConfig = Join-Path $repo 'config.json'
 
 function Download-WithRetry([string]$Uri, [string]$OutFile, [int]$Retries = 4, [int]$DelaySec = 2) {
     for ($i = 0; $i -le $Retries; $i++) {
@@ -55,6 +60,76 @@ function Invoke-Nssm([string]$ExePath, [string[]]$Args) {
     if ($LASTEXITCODE -ne 0) {
         throw "nssm failed (exit $LASTEXITCODE): $($Args -join ' ')"
     }
+}
+
+function Resolve-StateRoot([string]$Root, [string]$RepoRoot) {
+    if (-not [string]::IsNullOrWhiteSpace($Root)) {
+        return $Root
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:ProgramData)) {
+        return (Join-Path $env:ProgramData 'Constitute\Gateway')
+    }
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) {
+        return (Join-Path $env:LOCALAPPDATA 'Constitute\Gateway')
+    }
+    return (Join-Path $RepoRoot '.state')
+}
+
+function Convert-ToBase64UrlSha256([string]$InputText) {
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($InputText)
+        $hash = $sha.ComputeHash($bytes)
+        return [Convert]::ToBase64String($hash).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Normalize-Config {
+    param(
+        [string]$Path,
+        [string]$StateRootPath,
+        [string]$DefaultDataDir,
+        [string]$PairIdentityLabel,
+        [string]$PairCodeValue,
+        [string]$PairCodeHashValue
+    )
+
+    $cfg = Get-Content $Path -Raw | ConvertFrom-Json
+    $raw = [string]$cfg.data_dir
+    $trimmed = $raw.Trim()
+    if ([string]::IsNullOrWhiteSpace($trimmed)) {
+        $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $DefaultDataDir -Force
+    } elseif ($trimmed -in @('./data', '.\data', 'data')) {
+        $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $DefaultDataDir -Force
+    } elseif ([System.IO.Path]::IsPathRooted($trimmed)) {
+        $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $trimmed -Force
+    } else {
+        $resolved = Join-Path $StateRootPath ($trimmed.TrimStart('.', '\', '/'))
+        $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $resolved -Force
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($PairIdentityLabel)) {
+        $cfg | Add-Member -NotePropertyName pair_identity_label -NotePropertyValue $PairIdentityLabel -Force
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PairCodeValue)) {
+        $cfg | Add-Member -NotePropertyName pair_code -NotePropertyValue $PairCodeValue -Force
+    }
+    if ([string]::IsNullOrWhiteSpace($PairCodeHashValue) -and -not [string]::IsNullOrWhiteSpace($PairIdentityLabel) -and -not [string]::IsNullOrWhiteSpace($PairCodeValue)) {
+        $PairCodeHashValue = Convert-ToBase64UrlSha256 "$PairIdentityLabel|$PairCodeValue"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PairCodeHashValue)) {
+        $cfg | Add-Member -NotePropertyName pair_code_hash -NotePropertyValue $PairCodeHashValue -Force
+    }
+    if ($null -eq $cfg.pair_request_interval_secs) {
+        $cfg | Add-Member -NotePropertyName pair_request_interval_secs -NotePropertyValue 15 -Force
+    }
+    if ($null -eq $cfg.pair_request_attempts) {
+        $cfg | Add-Member -NotePropertyName pair_request_attempts -NotePropertyValue 24 -Force
+    }
+
+    $cfg | ConvertTo-Json -Depth 40 | Set-Content -Encoding UTF8 $Path
 }
 
 $defaultToolsRoot = if ($env:ProgramData) {
@@ -135,15 +210,35 @@ if (-not $bin -or -not (Test-Path $bin)) {
     throw "Binary not found after build: $bin"
 }
 
-if (-not (Test-Path $config)) {
-    if (Test-Path $configExample) {
-        Copy-Item $configExample $config
+$StateRoot = Resolve-StateRoot -Root $StateRoot -RepoRoot $repo
+if ([string]::IsNullOrWhiteSpace($ConfigPath)) {
+    $ConfigPath = Join-Path $StateRoot 'config.json'
+}
+
+$dataDir = Join-Path $StateRoot 'data'
+$logsDir = Join-Path $StateRoot 'logs'
+
+New-Item -ItemType Directory -Force -Path $StateRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
+New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+
+if (-not (Test-Path $ConfigPath)) {
+    if (Test-Path $legacyConfig) {
+        Copy-Item $legacyConfig $ConfigPath -Force
+    } elseif (Test-Path $configExample) {
+        Copy-Item $configExample $ConfigPath -Force
     } else {
-        throw 'config.json missing and no config.example.json to copy'
+        throw "config template missing: expected $legacyConfig or $configExample"
     }
 }
 
-$dataDir = Join-Path $env:ProgramData 'Constitute\Gateway\data'
+$legacyDataDir = Join-Path $repo 'data'
+if (Test-Path $legacyDataDir) {
+    Copy-Item -Path (Join-Path $legacyDataDir '*') -Destination $dataDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+Normalize-Config -Path $ConfigPath -StateRootPath $StateRoot -DefaultDataDir $dataDir -PairIdentityLabel $PairIdentity -PairCodeValue $PairCode -PairCodeHashValue $PairCodeHash
+
 $zoneSeed = Join-Path $dataDir 'zone.seed'
 if (-not (Test-Path $zoneSeed)) {
     if (-not $Zone) {
@@ -163,9 +258,12 @@ if (-not $serviceExists) {
 }
 
 Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'Application', $bin)
-Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppDirectory', $repo)
-Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppParameters', "--config $config")
+$appParams = "--config `"$ConfigPath`""
+Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppDirectory', $StateRoot)
+Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppParameters', $appParams)
 Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'Start', 'SERVICE_DELAYED_AUTO_START')
+Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppStdout', (Join-Path $logsDir 'gateway.out.log'))
+Invoke-Nssm -ExePath $resolvedNssmPath -Args @('set', $ServiceName, 'AppStderr', (Join-Path $logsDir 'gateway.err.log'))
 
 if ($serviceExists) {
     Invoke-Nssm -ExePath $resolvedNssmPath -Args @('restart', $ServiceName)
