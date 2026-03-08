@@ -28,7 +28,7 @@ use tokio::sync::{mpsc, watch, Mutex};
 use tokio::time::{timeout, Instant};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -417,6 +417,15 @@ fn normalize_zone_name(name: &str) -> String {
     }
 }
 
+fn init_rustls_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_none() {
+        match rustls::crypto::ring::default_provider().install_default() {
+            Ok(()) => debug!("installed rustls ring crypto provider"),
+            Err(_) => debug!("rustls crypto provider already installed"),
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // === CLI and logging bootstrap ===
@@ -430,6 +439,8 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+
+    init_rustls_provider();
 
     // === Config and secure state bootstrap ===
     let config_path = args.config.unwrap_or_else(platform::default_config_path);
