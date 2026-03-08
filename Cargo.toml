@@ -34,7 +34,7 @@ sysinfo = "0.29"
 bytes = "1"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
 rcgen = "0.13"
-rustls = "0.23"
+rustls = { version = "0.23", features = ["ring"] }
 eframe = { version = "0.29", optional = true }
 
 [dev-dependencies]
