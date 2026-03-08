@@ -33,12 +33,6 @@ struct Cli {
     pair_identity: Option<String>,
 
     #[arg(long)]
-    pair_code: Option<String>,
-
-    #[arg(long)]
-    pair_code_hash: Option<String>,
-
-    #[arg(long)]
     skip_update_task: bool,
 
     #[command(subcommand)]
@@ -53,6 +47,11 @@ enum InstallTarget {
     LinuxService,
 }
 
+#[derive(Debug, Default, Clone)]
+struct PairingMaterial {
+    identity: Option<String>,
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
 
@@ -60,10 +59,37 @@ fn main() -> Result<()> {
         eprintln!("[operator] GUI mode has been removed. Using CLI flow.");
     }
 
+    let pairing = resolve_pairing_material(&cli);
+    maybe_print_pairing_note(&pairing);
+
     let target = cli.command.unwrap_or_else(default_target_for_host);
     match target {
-        InstallTarget::WindowsService => run_windows_service(&cli),
-        InstallTarget::LinuxService => run_linux_service(&cli),
+        InstallTarget::WindowsService => run_windows_service(&cli, &pairing),
+        InstallTarget::LinuxService => run_linux_service(&cli, &pairing),
+    }
+}
+
+fn normalize_opt(value: &Option<String>) -> Option<String> {
+    let v = value.as_deref().unwrap_or("").trim();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v.to_string())
+    }
+}
+
+fn resolve_pairing_material(cli: &Cli) -> PairingMaterial {
+    PairingMaterial {
+        identity: normalize_opt(&cli.pair_identity),
+    }
+}
+
+fn maybe_print_pairing_note(pairing: &PairingMaterial) {
+    if let Some(identity) = pairing.identity.as_deref() {
+        println!(
+            "[operator] pairing enabled for identity '{}'. First install will generate and print a one-time pairing code if needed.",
+            identity
+        );
     }
 }
 
@@ -75,7 +101,7 @@ fn default_target_for_host() -> InstallTarget {
     }
 }
 
-fn run_windows_service(cli: &Cli) -> Result<()> {
+fn run_windows_service(cli: &Cli, pairing: &PairingMaterial) -> Result<()> {
     if !cfg!(target_os = "windows") {
         bail!("windows-service is only supported on Windows hosts");
     }
@@ -99,14 +125,8 @@ fn run_windows_service(cli: &Cli) -> Result<()> {
     if let Some(install_dir) = cli.install_dir.as_deref().filter(|v| !v.trim().is_empty()) {
         cmd.arg("-InstallDir").arg(install_dir);
     }
-    if let Some(v) = cli.pair_identity.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("-PairIdentity").arg(v);
-    }
-    if let Some(v) = cli.pair_code.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("-PairCode").arg(v);
-    }
-    if let Some(v) = cli.pair_code_hash.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("-PairCodeHash").arg(v);
+    if let Some(v) = pairing.identity.as_deref() {
+        cmd.arg("-PairIdentity").arg(v).arg("-PairGenerate");
     }
     if cli.skip_update_task {
         cmd.arg("-SkipUpdateTask");
@@ -115,11 +135,11 @@ fn run_windows_service(cli: &Cli) -> Result<()> {
     run_command(cmd, cli.dry_run, "windows service install/update")
 }
 
-fn run_linux_service(cli: &Cli) -> Result<()> {
+fn run_linux_service(cli: &Cli, pairing: &PairingMaterial) -> Result<()> {
     let script = resolve_script(&["scripts", "linux", "install-latest.sh"])?;
 
     if cfg!(target_os = "windows") {
-        return run_linux_service_via_wsl(cli, &script);
+        return run_linux_service_via_wsl(cli, &script, pairing);
     }
 
     let mut cmd = Command::new("bash");
@@ -131,19 +151,13 @@ fn run_linux_service(cli: &Cli) -> Result<()> {
         .arg("--timer-interval")
         .arg(format!("{}m", cli.update_interval_minutes));
 
-    if let Some(v) = cli.pair_identity.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("--pair-identity").arg(v);
-    }
-    if let Some(v) = cli.pair_code.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("--pair-code").arg(v);
-    }
-    if let Some(v) = cli.pair_code_hash.as_deref().filter(|v| !v.trim().is_empty()) {
-        cmd.arg("--pair-code-hash").arg(v);
+    if let Some(v) = pairing.identity.as_deref() {
+        cmd.arg("--pair-identity").arg(v).arg("--pair-generate");
     }
     run_command(cmd, cli.dry_run, "linux service install/update")
 }
 
-fn run_linux_service_via_wsl(cli: &Cli, script: &Path) -> Result<()> {
+fn run_linux_service_via_wsl(cli: &Cli, script: &Path, pairing: &PairingMaterial) -> Result<()> {
     let wsl_script = wsl_path(script)?;
     let mut args: Vec<String> = vec![
         "bash".to_string(),
@@ -156,17 +170,10 @@ fn run_linux_service_via_wsl(cli: &Cli, script: &Path) -> Result<()> {
         format!("{}m", cli.update_interval_minutes),
     ];
 
-    if let Some(v) = cli.pair_identity.as_deref().filter(|v| !v.trim().is_empty()) {
+    if let Some(v) = pairing.identity.as_deref() {
         args.push("--pair-identity".to_string());
         args.push(v.to_string());
-    }
-    if let Some(v) = cli.pair_code.as_deref().filter(|v| !v.trim().is_empty()) {
-        args.push("--pair-code".to_string());
-        args.push(v.to_string());
-    }
-    if let Some(v) = cli.pair_code_hash.as_deref().filter(|v| !v.trim().is_empty()) {
-        args.push("--pair-code-hash".to_string());
-        args.push(v.to_string());
+        args.push("--pair-generate".to_string());
     }
 
     if cli.skip_update_task {

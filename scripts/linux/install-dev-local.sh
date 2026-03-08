@@ -9,8 +9,7 @@ SKIP_PULL=0
 SKIP_PREREQS=0
 NO_START=0
 PAIR_IDENTITY=""
-PAIR_CODE=""
-PAIR_CODE_HASH=""
+PAIR_GENERATE=0
 
 usage() {
   cat <<'EOF'
@@ -26,8 +25,7 @@ Options:
   --skip-pull                Do not fetch/reset branch before build
   --skip-prereqs             Do not auto-install prerequisites
   --pair-identity <label>    Identity label for pairing bootstrap
-  --pair-code <code>         Pairing code for bootstrap
-  --pair-code-hash <hash>    Pairing code hash (optional)
+  --pair-generate            Generate one-time pairing code when pairing is needed
   --no-start                 Install service but do not start/restart it
   -h, --help                 Show help
 
@@ -110,13 +108,9 @@ while [[ $# -gt 0 ]]; do
       PAIR_IDENTITY="${2:?missing value for --pair-identity}"
       shift 2
       ;;
-    --pair-code)
-      PAIR_CODE="${2:?missing value for --pair-code}"
-      shift 2
-      ;;
-    --pair-code-hash)
-      PAIR_CODE_HASH="${2:?missing value for --pair-code-hash}"
-      shift 2
+    --pair-generate)
+      PAIR_GENERATE=1
+      shift
       ;;
     --no-start)
       NO_START=1
@@ -177,11 +171,8 @@ install_args=(
 if [[ -n "$PAIR_IDENTITY" ]]; then
   install_args+=(--pair-identity "$PAIR_IDENTITY")
 fi
-if [[ -n "$PAIR_CODE" ]]; then
-  install_args+=(--pair-code "$PAIR_CODE")
-fi
-if [[ -n "$PAIR_CODE_HASH" ]]; then
-  install_args+=(--pair-code-hash "$PAIR_CODE_HASH")
+if [[ "$PAIR_GENERATE" -eq 1 ]]; then
+  install_args+=(--pair-generate)
 fi
 if [[ "$NO_START" -eq 1 ]]; then
   install_args+=(--no-start)

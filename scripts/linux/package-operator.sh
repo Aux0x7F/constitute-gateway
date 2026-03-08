@@ -30,12 +30,13 @@ cat > "$STAGE_DIR/README-operator.txt" <<'EOF'
 Constitute Operator Utility
 
 Linux usage:
-  ./constitute-operator linux-service
+  ./constitute-operator --pair-identity "<IDENTITY_LABEL>" linux-service
 
 Windows usage (from Windows package):
-  constitute-operator.exe windows-service
+  constitute-operator.exe --pair-identity "<IDENTITY_LABEL>" windows-service
 
 Default mode uses releases/latest.
+First install prints a generated one-time pairing code when pairing is pending.
 EOF
 
 rm -f "$artifact_path"

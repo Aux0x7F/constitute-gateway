@@ -4,65 +4,15 @@
 - Linux host (systemd)
 - Windows service host
 
+## Install and Update
+Primary install/update reference:
+- [`OPERATOR.md`](OPERATOR.md)
+
+This document focuses on runtime lifecycle, hardening, and verification.
+
 ## Entry Scripts
 - Linux: `./scripts/run.sh`
 - Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1`
-
-## Install and Update
-
-### Linux release install/update
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash
-```
-
-Linux defaults:
-- Config path: `/etc/constitute-gateway/config.json`
-- Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
-- Service user: `constitute-gateway` (system account).
-- Update rollback: installer restores previous binary/config if post-update health check fails.
-
-### Linux periodic update timer (production)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --timer-interval 30m
-```
-
-### Linux rapid polling (development release testing)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --dev-poll
-```
-
-### Windows release install/update
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content))"
-```
-
-Windows defaults:
-- State root: `%ProgramData%\Constitute\Gateway`
-- Config path: `%ProgramData%\Constitute\Gateway\config.json`
-- Data path: `%ProgramData%\Constitute\Gateway\data`
-- Bundle path: `%ProgramData%\Constitute\Gateway\bundle`
-- Auto-update task: `<ServiceName>-AutoUpdate` (30 minute default interval)
-- Update behavior: bundle overwrite is non-destructive to state; config backup is taken before reinstall.
-
-## Development Install (One-Liner)
-### Fedora Server / Linux (clone + build + local service install)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-dev-local.sh | bash
-```
-
-## Development Install (Local Build)
-
-### Linux local build + service install
-```bash
-cargo build --release --features platform-linux
-sudo ./scripts/linux/install-service.sh --binary ./target/release/constitute-gateway --config-template ./config.example.json
-```
-
-### Windows local build + service install
-```powershell
-cargo build --release --features platform-windows -j 1
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-service.ps1 -ServiceName ConstituteGateway
-```
 
 ## Service Lifecycle
 ### Linux
@@ -81,20 +31,25 @@ powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-service.ps1 -
 
 Uninstall removes service registration only. Binaries, config, and data are retained.
 
-## Update Egress Profiles
-Linux updater supports:
+## Update Egress Profiles (Linux)
+Supported by `scripts/linux/install-latest.sh`:
 - Direct (default)
 - HTTP(S) proxy: `--proxy-url <url>`
 - Tor SOCKS: `--tor --tor-socks <host:port>`
 - Optional Tor control: `--tor-control <host:port>`
 - Disable Tor circuit rotation retry: `--no-tor-rotate`
 
-
 ## Persistence Contract
 - Identity/device keys and encrypted keystore live under configured `data_dir` and are never stored in release bundle paths.
 - Updaters may replace binaries/scripts only; they must not delete configured state roots.
 - Relative `data_dir` values are normalized to stable platform state roots during install/update.
 - Failed updates must leave service usable (rollback to previous binary/config).
+
+## Pairing Contract (Installer)
+- Pairing code input is not operator-supplied.
+- Installer generates one-time pairing code only when pairing is pending and identity pairing is enabled.
+- Generated code is printed to terminal and claimed from owner web UI (`Settings > Pairing > Add Device`).
+- Updates should not regenerate pairing material for already-paired devices.
 
 ## Host Hardening
 Automation scripts:

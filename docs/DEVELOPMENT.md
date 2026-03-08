@@ -31,6 +31,21 @@ cargo test --features platform-linux -j 1
 cargo test
 ```
 
+## Operator Utility (Local Build)
+### Build
+```bash
+cargo build --release --bin constitute-operator --features platform-linux
+cargo build --release --bin constitute-operator --features platform-windows
+```
+
+### Local test (dry-run)
+```bash
+./target/release/constitute-operator --dry-run --pair-identity "test-identity" linux-service
+```
+```powershell
+.\target\release\constitute-operator.exe --dry-run --pair-identity "test-identity" windows-service
+```
+
 ## Formatting
 ```bash
 cargo fmt
