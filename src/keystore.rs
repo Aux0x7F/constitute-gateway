@@ -132,6 +132,28 @@ pub fn load_or_init(data_dir: &str, seed: SecureSeed) -> Result<(SecureState, Ke
     ))
 }
 
+pub fn update_zones(data_dir: &str, zones: Vec<ZoneEntry>) -> Result<()> {
+    let dir = PathBuf::from(data_dir);
+    std::fs::create_dir_all(&dir)?;
+    let store_path = dir.join(STORE_FILE_NAME);
+    if !store_path.exists() {
+        return Err(anyhow!("keystore not initialized"));
+    }
+
+    let raw = std::fs::read_to_string(&store_path)?;
+    let enc: EncryptedStore = serde_json::from_str(&raw)?;
+
+    let (key_source, _) = select_key_source(&dir)?;
+    let key = key_source.derive_key(&enc)?;
+    let mut payload = decrypt_payload(&enc, &key)?;
+    payload.zones = zones;
+
+    let next = encrypt_payload(&payload, &key_source)?;
+    let out = serde_json::to_string_pretty(&next)?;
+    std::fs::write(store_path, out)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SecureSeed {
     pub nostr_pubkey: String,

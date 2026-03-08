@@ -62,6 +62,8 @@ Key storage:
 ## Zone and Overlay Direction
 - UDP gossip is zone-scoped.
 - Gateways may join multiple zones.
+- Effective gateway zone scope is `identity zones + gateway extra zones`.
+- Identity zones are synced from owner web clients; extra zones are gateway-specific overrides from gateway settings.
 - Records are stored per-zone and not auto-bridged across zones.
 
 Future overlay model:
