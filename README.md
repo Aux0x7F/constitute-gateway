@@ -1,6 +1,6 @@
 # Constitute Gateway
 
-Native gateway service for Constitute. This repository provides the native dependency layer that browser clients and native services depend on for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
+Native gateway service for Constitute. This repository provides the native dependency layer that browser clients and native services use for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
 
 ## Scope
 - Nostr-based discovery bootstrap and zone presence publication
@@ -25,17 +25,16 @@ In progress:
 - Transport hardening and operational tuning for difficult NAT topologies
 - Web parity for full convergence on identity/device resolution behavior
 
-## Install Paths
-Recommended (owner workflow):
+## Installation
+Web workflow:
 - In `constitute` web, open `Settings > Appliances`
 - Use `Download Installer Utility`
-- Run the generated operator command shown in UI
+- Run the generated operator command
 
-CLI and source-build install flows:
-- README intentionally keeps install snippets minimal; complete CLI/source/advanced flows live in `docs/OPERATOR.md`.
+CLI and source-build workflow:
 - See [`docs/OPERATOR.md`](docs/OPERATOR.md)
 
-Operations and lifecycle (status/start/stop/hardening):
+Runtime operations:
 - See [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 
 ## Operator Artifacts
@@ -45,10 +44,10 @@ Release assets include:
 
 Operator scope is service install/update only (no media/image build path).
 
-## Start Here
-- Operator install and CLI reference: [`docs/OPERATOR.md`](docs/OPERATOR.md)
-- Runtime operations: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-- Contributors: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
+## Documentation
+- Operator install/update and CLI reference: [`docs/OPERATOR.md`](docs/OPERATOR.md)
+- Runtime operations and hardening: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- Development workflow: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - Protocol contracts: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - Project roadmap brief: [`docs/ROADMAP.md`](docs/ROADMAP.md)
 - Architecture and detailed roadmap: [`ARCHITECTURE.md`](ARCHITECTURE.md)

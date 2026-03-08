@@ -1,22 +1,19 @@
 # Operator Guide
 
-This document is the install/update reference for `constitute-gateway`.
+This document is the install and update reference for `constitute-gateway`.
 
-## Preferred Flow (Web-Driven)
-1. In `constitute` web: open `Settings > Appliances`.
-2. Click `Download Installer Utility`.
-3. Run the generated operator command shown in the UI.
-
-Notes:
-- The command passes `--pair-identity`.
-- On first install (when gateway is not already paired), installer scripts generate a one-time pairing code and print it.
-- Claim that code in `Settings > Pairing > Add Device` and approve.
-
-## Release Utility Assets
+## Release Artifacts
 - Windows: `constitute-operator-windows.zip`
 - Linux: `constitute-operator-linux-amd64.tar.gz`
 
-## CLI Quick Start
+## Web-Driven Install
+1. In `constitute` web, open `Settings > Appliances`.
+2. Click `Download Installer Utility`.
+3. Run the generated command from the operator host.
+
+The generated command passes `--pair-identity` so the installer can prepare pairing material when needed.
+
+## CLI Quick Start (Release Utility)
 
 ### Windows
 ```powershell
@@ -30,24 +27,30 @@ Notes:
 
 ## Build From Source
 
-### Windows (PowerShell)
+### Windows
 ```powershell
-git clone https://github.com/Aux0x7F/constitute-gateway.git; cd constitute-gateway; cargo build --release --features platform-windows --bin constitute-operator; .\target\release\constitute-operator.exe --pair-identity "<IDENTITY_LABEL>" windows-service
+git clone https://github.com/Aux0x7F/constitute-gateway.git
+cd constitute-gateway
+cargo build --release --features platform-windows --bin constitute-operator
+.\target\release\constitute-operator.exe --pair-identity "<IDENTITY_LABEL>" windows-service
 ```
 
-### Linux (Bash)
+### Linux
 ```bash
-git clone https://github.com/Aux0x7F/constitute-gateway.git && cd constitute-gateway && cargo build --release --features platform-linux --bin constitute-operator && ./target/release/constitute-operator --pair-identity "<IDENTITY_LABEL>" linux-service
+git clone https://github.com/Aux0x7F/constitute-gateway.git
+cd constitute-gateway
+cargo build --release --features platform-linux --bin constitute-operator
+./target/release/constitute-operator --pair-identity "<IDENTITY_LABEL>" linux-service
 ```
 
-## Pairing Generation Rules
-Pair code generation only occurs when all of the following are true:
+## Pairing Behavior
+Pairing code generation occurs only when all conditions are true:
 - `--pair-identity` is provided.
-- Installer is run with pair generation enabled (operator does this automatically).
-- Local gateway is not already paired (`identity_id` is empty in config).
+- Installer pair generation is enabled (handled by operator utility).
+- Gateway is not already paired (`identity_id` is empty).
 - Existing pairing material is missing or invalid for the target identity.
 
-Generation does not occur on normal updates for already-paired gateways.
+On generation, the installer prints the one-time code. Claim it in `Settings > Pairing > Add Device`.
 
 ## Advanced CLI Options
 Global options:
@@ -63,10 +66,10 @@ Subcommands:
 - `windows-service`
 - `linux-service`
 
-## Script-Level Alternatives
-You can call installer scripts directly, but operator is the canonical interface:
-- Linux release script: `scripts/linux/install-latest.sh`
-- Windows release script: `scripts/windows/install-latest.ps1`
+## Direct Script Usage
+Operator utility is the primary interface. Script-level entry points are available for automation:
+- Linux release installer: `scripts/linux/install-latest.sh`
+- Windows release installer: `scripts/windows/install-latest.ps1`
 - Linux local-dev bootstrap: `scripts/linux/install-dev-local.sh`
 
 ## Related Docs
