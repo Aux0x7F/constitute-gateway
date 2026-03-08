@@ -149,6 +149,26 @@ Gateway status events:
 - status lifecycle: `accepted` -> `started` -> (`complete` | `failed` | `rejected`)
 - includes `requestId`, `gatewayPk`, `toDevicePk`, `identityId`, `service`, `action`, optional `reason`/`detail`
 
+### Request: Gateway Zone Sync
+Incoming type:
+- `gateway_zone_sync_request`
+
+Required fields:
+- `requestId`
+- `toDevicePk` (must match gateway `devicePk`)
+- `identityId` (must match gateway runtime `identity_id`)
+- `zoneKeys` (identity zone keys)
+
+Optional fields:
+- `zone`
+- `extraZoneKeys` (gateway-local additional zones)
+
+Gateway status events:
+- `gateway_zone_sync_status`
+- status lifecycle: `complete` | `failed` | `rejected`
+- includes `requestId`, `gatewayPk`, `toDevicePk`, `identityId`, `zoneKeys`, `extraZoneKeys`, `restartRequired`, optional `reason`/`detail`
+- current runtime behavior persists zone scope immediately and requires service restart to apply transport listeners/filters
+
 ## Gateway <-> Gateway Mesh Transport
 
 ### Transport Modes

@@ -13,7 +13,7 @@ Rationale:
 - Service-layer work (NVR and similar) should consume stable primitives, not redefine them.
 
 ## Current Snapshot
-- Gateway: core discovery, app-channel bridge, zone-scoped UDP/DHT path, and optional QUIC mesh path implemented.
+- Gateway: core discovery, app-channel bridge, zone-scoped UDP/DHT path, optional QUIC mesh path, and gateway zone-sync control contract implemented.
 - Web convergence: partial; parity work remains.
 - NVR: service installation/status contract implemented in gateway; broader integration remains in sibling repos.
 

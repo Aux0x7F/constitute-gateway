@@ -262,6 +262,51 @@ struct GatewayServiceInstallStatusPayload {
     ts: u64,
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayZoneSyncRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(default)]
+    zone: String,
+    #[serde(rename = "zoneKeys", default)]
+    zone_keys: Vec<String>,
+    #[serde(rename = "extraZoneKeys", default)]
+    extra_zone_keys: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewayZoneSyncStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    zone: Option<String>,
+    #[serde(rename = "zoneKeys")]
+    zone_keys: Vec<String>,
+    #[serde(rename = "extraZoneKeys")]
+    extra_zone_keys: Vec<String>,
+    #[serde(rename = "restartRequired")]
+    restart_required: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
+}
+
 fn default_bind() -> String {
     "0.0.0.0:4040".to_string()
 }
@@ -906,6 +951,7 @@ async fn main() -> Result<()> {
     // === Inbound processing context shared by nostr/local relay/UDP paths ===
     let inbound_ctx = InboundContext {
         self_pk: cfg.nostr_pubkey.clone(),
+        data_dir: cfg.data_dir.clone(),
         self_sk: cfg.nostr_sk_hex.clone(),
         gateway_identity_id: cfg.identity_id.clone(),
         rebroadcast: cfg.relay_rebroadcast,
@@ -1285,12 +1331,64 @@ fn normalize_gateway_service_install_request(req: &mut GatewayServiceInstallRequ
     req.swarm_peers = dedup_trimmed(&req.swarm_peers, 32);
 }
 
+fn dedup_valid_zone_keys(values: &[String], max: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in values {
+        let trimmed = item.trim();
+        if trimmed.is_empty() || !util::is_valid_zone_key(trimmed) {
+            continue;
+        }
+        let trimmed = trimmed.to_string();
+        if out.contains(&trimmed) {
+            continue;
+        }
+        out.push(trimmed);
+        if out.len() >= max {
+            break;
+        }
+    }
+    out
+}
+
+fn normalize_gateway_zone_sync_request(req: &mut GatewayZoneSyncRequest) {
+    req.request_id = trim_nonempty(&req.request_id);
+    if req.request_id.is_empty() {
+        req.request_id = make_install_request_id();
+    }
+    req.to_device_pk = trim_nonempty(&req.to_device_pk);
+    req.identity_id = trim_nonempty(&req.identity_id);
+    req.zone = trim_nonempty(&req.zone);
+    req.zone_keys = dedup_valid_zone_keys(&req.zone_keys, 64);
+    req.extra_zone_keys = dedup_valid_zone_keys(&req.extra_zone_keys, 64);
+}
+
 async fn publish_gateway_service_install_status(
     relay_pool: &relay::RelayPool,
     local_relay: &Option<local_relay::LocalRelayHandle>,
     pubkey: &str,
     sk_hex: &str,
     payload: &GatewayServiceInstallStatusPayload,
+) -> Result<()> {
+    if pubkey.is_empty() || sk_hex.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(payload)?;
+    let ev = build_app_event(pubkey, sk_hex, &value)?;
+    relay_pool.broadcast(&nostr::frame_event(&ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(ev) {
+            local.publish_event(val).await;
+        }
+    }
+    Ok(())
+}
+
+async fn publish_gateway_zone_sync_status(
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &GatewayZoneSyncStatusPayload,
 ) -> Result<()> {
     if pubkey.is_empty() || sk_hex.is_empty() {
         return Ok(());
@@ -1464,7 +1562,10 @@ fn execute_nvr_install_request(
 
     if !out.status.success() {
         if has_timeout_bin && out.status.code() == Some(124) {
-            return Err(anyhow!("nvr install timed out after {}s", timeout_secs.max(60)));
+            return Err(anyhow!(
+                "nvr install timed out after {}s",
+                timeout_secs.max(60)
+            ));
         }
         return Err(anyhow!(
             "nvr install failed (code={:?}): {}",
@@ -1883,6 +1984,34 @@ fn build_gateway_service_install_status_payload(
     }
 }
 
+fn build_gateway_zone_sync_status_payload(
+    req: &GatewayZoneSyncRequest,
+    gateway_pk: &str,
+    status: &str,
+    reason: Option<String>,
+    detail: Option<String>,
+    zone: Option<String>,
+    restart_required: bool,
+    zone_keys: Vec<String>,
+    extra_zone_keys: Vec<String>,
+) -> GatewayZoneSyncStatusPayload {
+    GatewayZoneSyncStatusPayload {
+        kind: "gateway_zone_sync_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.to_device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        zone,
+        zone_keys,
+        extra_zone_keys,
+        restart_required,
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
+    }
+}
+
 async fn handle_gateway_service_install_request(
     ctx: &InboundContext,
     nostr_ev: &nostr::NostrEvent,
@@ -1908,7 +2037,14 @@ async fn handle_gateway_service_install_request(
     };
 
     let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
-        build_gateway_service_install_status_payload(&req, &ctx.self_pk, status, reason, detail, zone.clone())
+        build_gateway_service_install_status_payload(
+            &req,
+            &ctx.self_pk,
+            status,
+            reason,
+            detail,
+            zone.clone(),
+        )
     };
 
     if !ctx.remote_service_install_enabled {
@@ -2081,7 +2217,10 @@ async fn handle_gateway_service_install_request(
         .await;
 
         let run_req = req_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || execute_nvr_install_request(&run_req, timeout_secs)).await;
+        let result = tokio::task::spawn_blocking(move || {
+            execute_nvr_install_request(&run_req, timeout_secs)
+        })
+        .await;
 
         match result {
             Ok(Ok(detail)) => {
@@ -2090,7 +2229,11 @@ async fn handle_gateway_service_install_request(
                     &self_pk,
                     "complete",
                     None,
-                    if detail.is_empty() { None } else { Some(detail) },
+                    if detail.is_empty() {
+                        None
+                    } else {
+                        Some(detail)
+                    },
                     zone_copy.clone(),
                 );
                 let _ = publish_gateway_service_install_status(
@@ -2140,6 +2283,275 @@ async fn handle_gateway_service_install_request(
             }
         }
     });
+}
+
+async fn handle_gateway_zone_sync_request(
+    ctx: &InboundContext,
+    nostr_ev: &nostr::NostrEvent,
+    payload: &Value,
+) {
+    let mut req: GatewayZoneSyncRequest = match serde_json::from_value(payload.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            warn!(error = %err, "invalid gateway_zone_sync_request payload");
+            return;
+        }
+    };
+    normalize_gateway_zone_sync_request(&mut req);
+
+    if req.to_device_pk != ctx.self_pk {
+        return;
+    }
+
+    let zone = if req.zone.is_empty() {
+        payload_zone(payload)
+    } else {
+        Some(req.zone.clone())
+    };
+
+    let publish_status = |status: &str,
+                          reason: Option<String>,
+                          detail: Option<String>,
+                          restart_required: bool,
+                          zone_keys: Vec<String>,
+                          extra_zone_keys: Vec<String>| {
+        build_gateway_zone_sync_status_payload(
+            &req,
+            &ctx.self_pk,
+            status,
+            reason,
+            detail,
+            zone.clone(),
+            restart_required,
+            zone_keys,
+            extra_zone_keys,
+        )
+    };
+
+    if !ctx.remote_service_install_enabled {
+        let status = publish_status(
+            "rejected",
+            Some("remote_install_disabled".to_string()),
+            Some("gateway remote control is disabled".to_string()),
+            false,
+            req.zone_keys.clone(),
+            req.extra_zone_keys.clone(),
+        );
+        let _ = publish_gateway_zone_sync_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let gateway_identity = ctx.gateway_identity_id.trim();
+    if gateway_identity.is_empty() {
+        let status = publish_status(
+            "rejected",
+            Some("gateway_identity_missing".to_string()),
+            Some("gateway identity is not configured".to_string()),
+            false,
+            req.zone_keys.clone(),
+            req.extra_zone_keys.clone(),
+        );
+        let _ = publish_gateway_zone_sync_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.identity_id.trim() != gateway_identity {
+        let status = publish_status(
+            "rejected",
+            Some("identity_mismatch".to_string()),
+            Some("request identity does not match gateway identity".to_string()),
+            false,
+            req.zone_keys.clone(),
+            req.extra_zone_keys.clone(),
+        );
+        let _ = publish_gateway_zone_sync_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let requester_pk = nostr_ev.pubkey.clone();
+    if !is_requester_authorized_for_service_install(ctx, &requester_pk, &req.identity_id).await {
+        let status = publish_status(
+            "rejected",
+            Some("unauthorized_requester".to_string()),
+            Some("requester is not authorized for this identity".to_string()),
+            false,
+            req.zone_keys.clone(),
+            req.extra_zone_keys.clone(),
+        );
+        let _ = publish_gateway_zone_sync_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let mut identity_zone_keys = req.zone_keys.clone();
+    if identity_zone_keys.is_empty() {
+        if let Some(z) = zone.clone() {
+            if util::is_valid_zone_key(&z) {
+                identity_zone_keys.push(z);
+            }
+        }
+    }
+
+    let mut effective_zone_keys = identity_zone_keys.clone();
+    for z in &req.extra_zone_keys {
+        if !effective_zone_keys.contains(z) {
+            effective_zone_keys.push(z.clone());
+        }
+    }
+    effective_zone_keys = dedup_valid_zone_keys(&effective_zone_keys, 64);
+
+    if effective_zone_keys.is_empty() {
+        let status = publish_status(
+            "rejected",
+            Some("missing_zones".to_string()),
+            Some("at least one valid zone key is required".to_string()),
+            false,
+            identity_zone_keys.clone(),
+            req.extra_zone_keys.clone(),
+        );
+        let _ = publish_gateway_zone_sync_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let seed = keystore::SecureSeed {
+        nostr_pubkey: ctx.self_pk.clone(),
+        nostr_sk_hex: ctx.self_sk.clone(),
+        identity_id: ctx.gateway_identity_id.clone(),
+        device_label: String::new(),
+        zones: Vec::new(),
+    };
+
+    let (secure, _) = match keystore::load_or_init(&ctx.data_dir, seed) {
+        Ok(v) => v,
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                Some("keystore_error".to_string()),
+                Some(err.to_string()),
+                false,
+                identity_zone_keys.clone(),
+                req.extra_zone_keys.clone(),
+            );
+            let _ = publish_gateway_zone_sync_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let mut names: HashMap<String, String> = HashMap::new();
+    for z in secure.zones {
+        let key = z.key.trim().to_string();
+        if key.is_empty() {
+            continue;
+        }
+        let name = z.name.trim().to_string();
+        if !names.contains_key(&key) {
+            names.insert(
+                key,
+                if name.is_empty() {
+                    "Joined".to_string()
+                } else {
+                    name
+                },
+            );
+        }
+    }
+
+    let zone_entries: Vec<keystore::ZoneEntry> = effective_zone_keys
+        .iter()
+        .map(|key| keystore::ZoneEntry {
+            key: key.clone(),
+            name: names
+                .get(key)
+                .cloned()
+                .unwrap_or_else(|| "Joined".to_string()),
+        })
+        .collect();
+
+    match keystore::update_zones(&ctx.data_dir, zone_entries) {
+        Ok(()) => {
+            let detail = format!(
+                "stored {} zones ({} identity + {} extra); restart gateway service to apply runtime transport scope",
+                effective_zone_keys.len(),
+                identity_zone_keys.len(),
+                req.extra_zone_keys.len()
+            );
+            let status = publish_status(
+                "complete",
+                None,
+                Some(detail),
+                true,
+                effective_zone_keys,
+                req.extra_zone_keys.clone(),
+            );
+            let _ = publish_gateway_zone_sync_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+        }
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                Some("zone_persist_failed".to_string()),
+                Some(err.to_string()),
+                false,
+                req.zone_keys.clone(),
+                req.extra_zone_keys.clone(),
+            );
+            let _ = publish_gateway_zone_sync_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+        }
+    }
 }
 
 fn build_device_record_event(
@@ -2332,6 +2744,8 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
             | "swarm_signal"
             | "gateway_service_install_request"
             | "gateway_service_install_status"
+            | "gateway_zone_sync_request"
+            | "gateway_zone_sync_status"
     )
 }
 
@@ -2417,6 +2831,7 @@ struct PendingRequest {
 #[derive(Clone)]
 struct InboundContext {
     self_pk: String,
+    data_dir: String,
     self_sk: String,
     gateway_identity_id: String,
     rebroadcast: bool,
@@ -2729,6 +3144,11 @@ async fn process_inbound_event(
         }
         if kind == "gateway_service_install_request" {
             handle_gateway_service_install_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_zone_sync_request" {
+            handle_gateway_zone_sync_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
@@ -3687,6 +4107,7 @@ mod tests {
 
         let ctx = InboundContext {
             self_pk: pk.clone(),
+            data_dir: ".".to_string(),
             self_sk: sk.clone(),
             rebroadcast: false,
             relay_pool: relay::RelayPool::empty(),
@@ -3869,6 +4290,7 @@ mod tests {
 
         let ctx = InboundContext {
             self_pk: pk.clone(),
+            data_dir: ".".to_string(),
             self_sk: sk.clone(),
             rebroadcast: false,
             relay_pool: relay::RelayPool::empty(),
@@ -4008,6 +4430,7 @@ mod tests {
 
         let ctx = InboundContext {
             self_pk: pk.clone(),
+            data_dir: ".".to_string(),
             self_sk: sk.clone(),
             rebroadcast: false,
             relay_pool: relay::RelayPool::empty(),

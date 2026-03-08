@@ -30,6 +30,7 @@ Web workflow:
 - In `constitute` web, open `Settings > Appliances`
 - Use `Download Installer Utility`
 - Run the generated operator command
+- After pairing, use `Configure Zones` in web Appliances to sync identity zones and optional gateway-extra zones
 
 CLI and source-build workflow:
 - See [`docs/OPERATOR.md`](docs/OPERATOR.md)

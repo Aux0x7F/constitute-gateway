@@ -49,7 +49,9 @@ pub fn is_valid_zone_key(key: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_zone_key, is_valid_zone_key, normalize_log_level, now_unix_seconds, sha256_b64url};
+    use super::{
+        derive_zone_key, is_valid_zone_key, normalize_log_level, now_unix_seconds, sha256_b64url,
+    };
 
     #[test]
     fn normalize_log_level_accepts_known_levels() {
@@ -81,7 +83,9 @@ mod tests {
         let v = sha256_b64url("abc");
         assert!(!v.is_empty());
         assert!(!v.contains('='));
-        assert!(v.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(v
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
     }
 
     #[test]
@@ -92,6 +96,3 @@ mod tests {
         assert!(!is_valid_zone_key("invalid!invalid!invalid!"));
     }
 }
-
-
-

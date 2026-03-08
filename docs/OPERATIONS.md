@@ -51,6 +51,12 @@ Supported by `scripts/linux/install-latest.sh`:
 - Generated code is printed to terminal and claimed from owner web UI (`Settings > Pairing > Add Device`).
 - Updates should not regenerate pairing material for already-paired devices.
 
+## Gateway Zone Sync Contract
+- Owner web clients may submit `gateway_zone_sync_request` with identity zones plus optional gateway-extra zones.
+- Gateway persists synced zone scope to keystore state.
+- Current runtime requires gateway service restart to apply updated transport zone listeners and filters.
+- Acknowledgement arrives as `gateway_zone_sync_status` with `restartRequired=true` when persistence succeeds.
+
 ## Host Hardening
 Automation scripts:
 - `scripts/linux/harden-host.sh`
