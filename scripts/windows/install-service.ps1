@@ -5,8 +5,7 @@ param(
     [string]$StateRoot = '',
     [string]$ConfigPath = '',
     [string]$PairIdentity = '',
-    [string]$PairCode = '',
-    [string]$PairCodeHash = ''
+    [switch]$PairGenerate
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,8 +91,7 @@ function Normalize-Config {
         [string]$StateRootPath,
         [string]$DefaultDataDir,
         [string]$PairIdentityLabel,
-        [string]$PairCodeValue,
-        [string]$PairCodeHashValue
+        [bool]$ShouldGeneratePairCode
     )
 
     $cfg = Get-Content $Path -Raw | ConvertFrom-Json
@@ -110,18 +108,27 @@ function Normalize-Config {
         $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $resolved -Force
     }
 
+    $existingIdentity = [string]$cfg.pair_identity_label
+    $existingCode = [string]$cfg.pair_code
+    $existingHash = [string]$cfg.pair_code_hash
+    $identityId = [string]$cfg.identity_id
+
     if (-not [string]::IsNullOrWhiteSpace($PairIdentityLabel)) {
         $cfg | Add-Member -NotePropertyName pair_identity_label -NotePropertyValue $PairIdentityLabel -Force
     }
-    if (-not [string]::IsNullOrWhiteSpace($PairCodeValue)) {
-        $cfg | Add-Member -NotePropertyName pair_code -NotePropertyValue $PairCodeValue -Force
+
+    $effectiveIdentity = [string]$cfg.pair_identity_label
+    $generatedPairCode = ''
+    if ($ShouldGeneratePairCode -and -not [string]::IsNullOrWhiteSpace($effectiveIdentity) -and [string]::IsNullOrWhiteSpace($identityId)) {
+        $identityChanged = (-not [string]::IsNullOrWhiteSpace($PairIdentityLabel)) -and ($existingIdentity -ne $effectiveIdentity)
+        $missingPair = [string]::IsNullOrWhiteSpace($existingCode) -or [string]::IsNullOrWhiteSpace($existingHash)
+        if ($identityChanged -or $missingPair) {
+            $generatedPairCode = (Get-Random -Minimum 100000 -Maximum 1000000).ToString()
+            $cfg | Add-Member -NotePropertyName pair_code -NotePropertyValue $generatedPairCode -Force
+            $cfg | Add-Member -NotePropertyName pair_code_hash -NotePropertyValue (Convert-ToBase64UrlSha256 "$effectiveIdentity|$generatedPairCode") -Force
+        }
     }
-    if ([string]::IsNullOrWhiteSpace($PairCodeHashValue) -and -not [string]::IsNullOrWhiteSpace($PairIdentityLabel) -and -not [string]::IsNullOrWhiteSpace($PairCodeValue)) {
-        $PairCodeHashValue = Convert-ToBase64UrlSha256 "$PairIdentityLabel|$PairCodeValue"
-    }
-    if (-not [string]::IsNullOrWhiteSpace($PairCodeHashValue)) {
-        $cfg | Add-Member -NotePropertyName pair_code_hash -NotePropertyValue $PairCodeHashValue -Force
-    }
+
     if ($null -eq $cfg.pair_request_interval_secs) {
         $cfg | Add-Member -NotePropertyName pair_request_interval_secs -NotePropertyValue 15 -Force
     }
@@ -130,6 +137,7 @@ function Normalize-Config {
     }
 
     $cfg | ConvertTo-Json -Depth 40 | Set-Content -Encoding UTF8 $Path
+    return $generatedPairCode
 }
 
 $defaultToolsRoot = if ($env:ProgramData) {
@@ -237,7 +245,7 @@ if (Test-Path $legacyDataDir) {
     Copy-Item -Path (Join-Path $legacyDataDir '*') -Destination $dataDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
-Normalize-Config -Path $ConfigPath -StateRootPath $StateRoot -DefaultDataDir $dataDir -PairIdentityLabel $PairIdentity -PairCodeValue $PairCode -PairCodeHashValue $PairCodeHash
+$generatedPairCode = Normalize-Config -Path $ConfigPath -StateRootPath $StateRoot -DefaultDataDir $dataDir -PairIdentityLabel $PairIdentity -ShouldGeneratePairCode $PairGenerate.IsPresent
 
 $zoneSeed = Join-Path $dataDir 'zone.seed'
 if (-not (Test-Path $zoneSeed)) {
@@ -271,4 +279,8 @@ if ($serviceExists) {
 } else {
     Invoke-Nssm -ExePath $resolvedNssmPath -Args @('start', $ServiceName)
     Write-Host "Service installed and started: $ServiceName (delayed auto-start)"
+}
+
+if (-not [string]::IsNullOrWhiteSpace($generatedPairCode)) {
+    Write-Host "Pairing code (claim in Settings > Pairing > Add Device): $generatedPairCode"
 }

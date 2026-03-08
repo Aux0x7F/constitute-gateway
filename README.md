@@ -25,55 +25,20 @@ In progress:
 - Transport hardening and operational tuning for difficult NAT topologies
 - Web parity for full convergence on identity/device resolution behavior
 
-## Release Install (One-Liners)
-### Linux service (install/update from releases/latest)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash
-```
+## Install Paths
+Recommended (owner workflow):
+- In `constitute` web, open `Settings > Appliances`
+- Use `Download Installer Utility`
+- Run the generated operator command shown in UI
 
-Linux installer defaults:
-- Config path: `/etc/constitute-gateway/config.json`
-- Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
-- Service runtime user: `constitute-gateway` (system user).
-- Update safety: updater preserves config/data and rolls back binary/config if post-update health check fails.
+CLI and source-build install flows:
+- README intentionally keeps install snippets minimal; complete CLI/source/advanced flows live in `docs/OPERATOR.md`.
+- See [`docs/OPERATOR.md`](docs/OPERATOR.md)
 
-### Windows service (install/update from releases/latest)
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((iwr https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/windows/install-latest.ps1 -UseBasicParsing).Content))"
-```
+Operations and lifecycle (status/start/stop/hardening):
+- See [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 
-Windows installer defaults:
-- State root: `%ProgramData%\Constitute\Gateway`
-- Config path: `%ProgramData%\Constitute\Gateway\config.json`
-- Data path: `%ProgramData%\Constitute\Gateway\data`
-- Bundle path: `%ProgramData%\Constitute\Gateway\bundle`
-- Auto-update task: `<ServiceName>-AutoUpdate` (30 minute default interval)
-- Update safety: bundle updates are non-destructive to state/config; config is backed up before reinstall.
-
-## Development Install (One-Liner)
-### Fedora Server / Linux (clone + build + install service locally)
-```bash
-curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-dev-local.sh | bash
-```
-
-## Development Install (Local Clone + Local Build)
-### Linux
-```bash
-git clone https://github.com/Aux0x7F/constitute-gateway.git
-cd constitute-gateway
-cargo build --release --features platform-linux
-sudo ./scripts/linux/install-service.sh --binary ./target/release/constitute-gateway --config-template ./config.example.json
-```
-
-### Windows
-```powershell
-git clone https://github.com/Aux0x7F/constitute-gateway.git
-cd constitute-gateway
-cargo build --release --features platform-windows -j 1
-powershell -ExecutionPolicy Bypass -File .\scripts\windows\install-service.ps1 -ServiceName ConstituteGateway
-```
-
-## Optional Operator Utility
+## Operator Artifacts
 Release assets include:
 - `constitute-operator-windows.zip`
 - `constitute-operator-linux-amd64.tar.gz`
@@ -81,7 +46,8 @@ Release assets include:
 Operator scope is service install/update only (no media/image build path).
 
 ## Start Here
-- Operators: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
+- Operator install and CLI reference: [`docs/OPERATOR.md`](docs/OPERATOR.md)
+- Runtime operations: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
 - Contributors: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
 - Protocol contracts: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
 - Project roadmap brief: [`docs/ROADMAP.md`](docs/ROADMAP.md)

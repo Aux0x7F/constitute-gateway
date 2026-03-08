@@ -4,8 +4,7 @@ param(
     [string]$ServiceName = 'ConstituteGateway',
     [string]$InstallDir = '',
     [string]$PairIdentity = '',
-    [string]$PairCode = '',
-    [string]$PairCodeHash = '',
+    [switch]$PairGenerate,
     [int]$UpdateIntervalMinutes = 30,
     [string]$UpdateTaskName = '',
     [switch]$SkipUpdateTask
@@ -162,7 +161,7 @@ try {
 
     $skipInstall = $false
     $installedBinary = Join-Path $InstallDir 'constitute-gateway.exe'
-    if ((Test-Path $installedBinary) -and (Service-Exists -Name $ServiceName) -and (-not $PairIdentity) -and (-not $PairCode) -and (-not $PairCodeHash)) {
+    if ((Test-Path $installedBinary) -and (Service-Exists -Name $ServiceName) -and (-not $PairIdentity) -and (-not $PairGenerate)) {
         $currentHash = (Get-FileHash $installedBinary -Algorithm SHA256).Hash.ToLower()
         $bundleHash = (Get-FileHash $bundleBinary -Algorithm SHA256).Hash.ToLower()
         if ($currentHash -eq $bundleHash) {
@@ -183,8 +182,7 @@ try {
             '-ConfigPath', $stateConfig
         )
         if (-not [string]::IsNullOrWhiteSpace($PairIdentity)) { $serviceArgs += @('-PairIdentity', $PairIdentity) }
-        if (-not [string]::IsNullOrWhiteSpace($PairCode)) { $serviceArgs += @('-PairCode', $PairCode) }
-        if (-not [string]::IsNullOrWhiteSpace($PairCodeHash)) { $serviceArgs += @('-PairCodeHash', $PairCodeHash) }
+        if ($PairGenerate) { $serviceArgs += @('-PairGenerate') }
 
         try {
             & powershell -ExecutionPolicy Bypass -File (Join-Path $InstallDir 'scripts\windows\install-service.ps1') @serviceArgs
