@@ -12,7 +12,7 @@ This folder is the primary documentation surface for `constitute-gateway`.
 
 ## Document Roles
 - [`docs/OPERATOR.md`](OPERATOR.md)
-  - Installer utility usage, CLI quick start, source-build one-liners, and pairing behavior.
+  - Installer utility usage, CLI quick start, source-build workflow, and pairing behavior.
 - [`docs/OPERATIONS.md`](OPERATIONS.md)
   - Runtime operations, service lifecycle, hardening, and verification checks.
 - [`docs/PROTOCOL.md`](PROTOCOL.md)
