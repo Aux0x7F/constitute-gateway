@@ -15,6 +15,10 @@
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash
 ```
 
+Linux defaults:
+- Data root auto-detect: `/data/constitute-gateway` when `/data` is mounted, else `/var/lib/constitute-gateway`.
+- Service user: `constitute-gateway` (system account).
+
 ### Linux periodic update timer (production)
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Aux0x7F/constitute-gateway/main/scripts/linux/install-latest.sh | bash -s -- --setup-timer --timer-interval 30m
