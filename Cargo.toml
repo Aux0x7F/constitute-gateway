@@ -14,6 +14,8 @@ anyhow = "1"
 argon2 = "0.5"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
 clap = { version = "4", features = ["derive"] }
 keyring = "2"
 rand = "0.8"

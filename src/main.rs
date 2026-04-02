@@ -55,7 +55,7 @@ struct ZoneConfig {
     name: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Debug, Deserialize, Serialize, Default, Clone)]
 struct Config {
     #[serde(default)]
     node_id: String,
@@ -305,6 +305,36 @@ struct GatewayZoneSyncStatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
     ts: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PairApprovePayload {
+    #[serde(default)]
+    identity: String,
+    #[serde(default)]
+    code: String,
+    #[serde(default, rename = "toPk")]
+    to_pk: String,
+    #[serde(default, rename = "fromPk")]
+    from_pk: String,
+    #[serde(default, rename = "encryptedRoomKey")]
+    encrypted_room_key: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PairApproveSecret {
+    #[serde(default, rename = "identityId")]
+    identity_id: String,
+    #[serde(default)]
+    devices: Vec<PairApproveDeviceEntry>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct PairApproveDeviceEntry {
+    #[serde(default)]
+    pk: String,
+    #[serde(default)]
+    label: String,
 }
 
 fn default_bind() -> String {
@@ -585,12 +615,13 @@ async fn main() -> Result<()> {
 
     // Persist only non-sensitive operational config; keystore owns secret material.
     if dirty {
-        // Do not persist secure fields into config.json for safety.
-        cfg.nostr_sk_hex.clear();
-        cfg.identity_id.clear();
-        cfg.device_label.clear();
-        cfg.zones.clear();
-        let _ = save_config(&config_path, &cfg);
+        // Do not mutate in-memory runtime config when sanitizing persisted config.json.
+        let mut persisted = cfg.clone();
+        persisted.nostr_sk_hex.clear();
+        persisted.identity_id.clear();
+        persisted.device_label.clear();
+        persisted.zones.clear();
+        let _ = save_config(&config_path, &persisted);
     }
 
     if cfg.nostr_relays.is_empty() {
@@ -777,7 +808,9 @@ async fn main() -> Result<()> {
     };
 
     if !pair_identity_label.is_empty() {
-        if pair_code_hash.is_empty() {
+        if !cfg.identity_id.trim().is_empty() {
+            info!(identity_id = %cfg.identity_id, "pairing already resolved; skipping enroll request");
+        } else if pair_code_hash.is_empty() {
             warn!("pair_identity_label configured but no pair_code or pair_code_hash was provided");
         } else if cfg.nostr_pubkey.is_empty() || cfg.nostr_sk_hex.is_empty() {
             warn!("pairing enroll request skipped: nostr keypair unavailable");
@@ -790,15 +823,18 @@ async fn main() -> Result<()> {
             let pair_zones = zones.clone();
             let pair_interval = Duration::from_secs(cfg.pair_request_interval_secs.max(5));
             let pair_attempts = cfg.pair_request_attempts.max(1);
+            let pair_identity_label_for_publish = pair_identity_label.clone();
+            let pair_code_for_publish = pair_code.clone();
+            let pair_code_hash_for_publish = pair_code_hash.clone();
             tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(pair_interval);
                 for attempt in 1..=pair_attempts {
                     match build_pair_request_event(
                         &pair_pk,
                         &pair_sk,
-                        &pair_identity_label,
-                        &pair_code,
-                        &pair_code_hash,
+                        &pair_identity_label_for_publish,
+                        &pair_code_for_publish,
+                        &pair_code_hash_for_publish,
                         &pair_label,
                         &pair_zones,
                     ) {
@@ -812,7 +848,7 @@ async fn main() -> Result<()> {
                             info!(
                                 attempt,
                                 attempts = pair_attempts,
-                                identity = %pair_identity_label,
+                                identity = %pair_identity_label_for_publish,
                                 "published gateway pair_request enrollment"
                             );
                         }
@@ -954,6 +990,8 @@ async fn main() -> Result<()> {
         data_dir: cfg.data_dir.clone(),
         self_sk: cfg.nostr_sk_hex.clone(),
         gateway_identity_id: cfg.identity_id.clone(),
+        pair_identity_label: pair_identity_label.clone(),
+        pair_code_hash: pair_code_hash.clone(),
         rebroadcast: cfg.relay_rebroadcast,
         relay_pool: relay_pool.clone(),
         local_relay: local_relay.clone(),
@@ -2834,6 +2872,8 @@ struct InboundContext {
     data_dir: String,
     self_sk: String,
     gateway_identity_id: String,
+    pair_identity_label: String,
+    pair_code_hash: String,
     rebroadcast: bool,
     relay_pool: relay::RelayPool,
     local_relay: Option<local_relay::LocalRelayHandle>,
@@ -3016,6 +3056,114 @@ async fn seen_or_insert(
     false
 }
 
+async fn handle_pair_approve_event(
+    ctx: &InboundContext,
+    ev: &nostr::NostrEvent,
+    payload: &Value,
+) -> bool {
+    let req: PairApprovePayload = match serde_json::from_value(payload.clone()) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let to_pk = req.to_pk.trim();
+    if to_pk.is_empty() || to_pk != ctx.self_pk.trim() {
+        return false;
+    }
+
+    let identity_label = req.identity.trim();
+    if identity_label.is_empty() {
+        warn!("pair_approve ignored: missing identity label");
+        return false;
+    }
+
+    if !ctx.pair_identity_label.trim().is_empty()
+        && identity_label != ctx.pair_identity_label.trim()
+    {
+        warn!(identity = %identity_label, expected = %ctx.pair_identity_label, "pair_approve ignored: identity mismatch");
+        return false;
+    }
+
+    let code = req.code.trim();
+    if code.is_empty() {
+        warn!("pair_approve ignored: missing code");
+        return false;
+    }
+
+    if !ctx.pair_code_hash.trim().is_empty() {
+        let computed = util::sha256_b64url(&format!("{}|{}", identity_label, code));
+        if computed != ctx.pair_code_hash.trim() {
+            warn!("pair_approve ignored: code hash mismatch");
+            return false;
+        }
+    }
+
+    let from_pk = if req.from_pk.trim().is_empty() {
+        ev.pubkey.trim().to_string()
+    } else {
+        req.from_pk.trim().to_string()
+    };
+    if from_pk != ev.pubkey.trim() {
+        warn!("pair_approve ignored: fromPk/pubkey mismatch");
+        return false;
+    }
+
+    if req.encrypted_room_key.trim().is_empty() {
+        warn!("pair_approve ignored: missing encryptedRoomKey");
+        return false;
+    }
+
+    let decrypted = match nostr::nip04_decrypt(&ctx.self_sk, &from_pk, &req.encrypted_room_key) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(error = %err, "pair_approve decrypt failed");
+            return false;
+        }
+    };
+
+    let secret: PairApproveSecret = match serde_json::from_str(&decrypted) {
+        Ok(v) => v,
+        Err(err) => {
+            warn!(error = %err, "pair_approve payload decode failed");
+            return false;
+        }
+    };
+
+    let identity_id = secret.identity_id.trim().to_string();
+    if identity_id.is_empty() {
+        warn!("pair_approve ignored: identityId missing in decrypted payload");
+        return false;
+    }
+
+    if !ctx.gateway_identity_id.trim().is_empty() && ctx.gateway_identity_id.trim() == identity_id {
+        return false;
+    }
+
+    let self_pk = ctx.self_pk.trim();
+    let device_label = secret
+        .devices
+        .iter()
+        .find(|d| d.pk.trim() == self_pk)
+        .map(|d| d.label.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    if let Err(err) =
+        keystore::update_identity(&ctx.data_dir, &identity_id, device_label.as_deref())
+    {
+        warn!(error = %err, "pair_approve persistence failed");
+        return false;
+    }
+
+    info!(identity = %identity_label, identity_id = %identity_id, "pair_approve accepted; scheduling gateway restart to apply identity");
+
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        std::process::exit(42);
+    });
+
+    true
+}
+
 // Core trust boundary for inbound events: signature validation, replay gating,
 // record indexing, and request lifecycle handling converge here.
 async fn process_inbound_event(
@@ -3142,6 +3290,12 @@ async fn process_inbound_event(
                 }
             }
         }
+        if kind == "pair_approve" {
+            if handle_pair_approve_event(&ctx, &nostr_ev, &payload).await {
+                return;
+            }
+        }
+
         if kind == "gateway_service_install_request" {
             handle_gateway_service_install_request(&ctx, &nostr_ev, &payload).await;
             return;
@@ -4123,6 +4277,8 @@ mod tests {
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
             gateway_identity_id: "id-test".to_string(),
+            pair_identity_label: String::new(),
+            pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
             authorized_control_device_pks: HashSet::new(),
@@ -4306,6 +4462,8 @@ mod tests {
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
             gateway_identity_id: "id-test".to_string(),
+            pair_identity_label: String::new(),
+            pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
             authorized_control_device_pks: HashSet::new(),
@@ -4446,6 +4604,8 @@ mod tests {
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
             gateway_identity_id: "id-test".to_string(),
+            pair_identity_label: String::new(),
+            pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
             authorized_control_device_pks: HashSet::new(),

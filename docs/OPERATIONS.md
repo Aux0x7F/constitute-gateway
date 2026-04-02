@@ -50,6 +50,7 @@ Supported by `scripts/linux/install-latest.sh`:
 - Installer generates one-time pairing code only when pairing is pending and identity pairing is enabled.
 - Generated code is printed to terminal and claimed from owner web UI (`Settings > Pairing > Add Device`).
 - Updates should not regenerate pairing material for already-paired devices.
+- On `pair_approve`, gateway persists the resolved `identity_id` in encrypted keystore state and exits once so the paired runtime reloads with the durable identity context.
 
 ## Gateway Zone Sync Contract
 - Owner web clients may submit `gateway_zone_sync_request` with identity zones plus optional gateway-extra zones.
