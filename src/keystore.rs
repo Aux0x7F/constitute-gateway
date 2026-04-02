@@ -154,6 +154,39 @@ pub fn update_zones(data_dir: &str, zones: Vec<ZoneEntry>) -> Result<()> {
     Ok(())
 }
 
+pub fn update_identity(
+    data_dir: &str,
+    identity_id: &str,
+    device_label: Option<&str>,
+) -> Result<()> {
+    let dir = PathBuf::from(data_dir);
+    std::fs::create_dir_all(&dir)?;
+    let store_path = dir.join(STORE_FILE_NAME);
+    if !store_path.exists() {
+        return Err(anyhow!("keystore not initialized"));
+    }
+
+    let raw = std::fs::read_to_string(&store_path)?;
+    let enc: EncryptedStore = serde_json::from_str(&raw)?;
+
+    let (key_source, _) = select_key_source(&dir)?;
+    let key = key_source.derive_key(&enc)?;
+    let mut payload = decrypt_payload(&enc, &key)?;
+    payload.identity_id = identity_id.trim().to_string();
+
+    if let Some(label) = device_label {
+        let trimmed = label.trim();
+        if !trimmed.is_empty() {
+            payload.device_label = trimmed.to_string();
+        }
+    }
+
+    let next = encrypt_payload(&payload, &key_source)?;
+    let out = serde_json::to_string_pretty(&next)?;
+    std::fs::write(store_path, out)?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct SecureSeed {
     pub nostr_pubkey: String,
@@ -325,10 +358,58 @@ fn decrypt_payload(enc: &EncryptedStore, key: &[u8]) -> Result<StorePayload> {
 #[cfg(test)]
 mod tests {
     use base64::Engine as _;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
-        decrypt_payload, derive_key_from_pass, encrypt_payload, KeySource, StorePayload, ZoneEntry,
+        decrypt_payload, derive_key_from_pass, encrypt_payload, load_or_init, update_identity,
+        KeySource, SecureSeed, StorePayload, ZoneEntry,
     };
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvRestore {
+        no_keyring: Option<String>,
+        passphrase: Option<String>,
+    }
+
+    impl Drop for EnvRestore {
+        fn drop(&mut self) {
+            match self.no_keyring.as_deref() {
+                Some(v) => std::env::set_var("CONSTITUTE_GATEWAY_NO_KEYRING", v),
+                None => std::env::remove_var("CONSTITUTE_GATEWAY_NO_KEYRING"),
+            }
+            match self.passphrase.as_deref() {
+                Some(v) => std::env::set_var("CONSTITUTE_GATEWAY_PASSPHRASE", v),
+                None => std::env::remove_var("CONSTITUTE_GATEWAY_PASSPHRASE"),
+            }
+        }
+    }
+
+    fn force_passphrase_env(passphrase: &str) -> EnvRestore {
+        let restore = EnvRestore {
+            no_keyring: std::env::var("CONSTITUTE_GATEWAY_NO_KEYRING").ok(),
+            passphrase: std::env::var("CONSTITUTE_GATEWAY_PASSPHRASE").ok(),
+        };
+        std::env::set_var("CONSTITUTE_GATEWAY_NO_KEYRING", "1");
+        std::env::set_var("CONSTITUTE_GATEWAY_PASSPHRASE", passphrase);
+        restore
+    }
+
+    fn unique_temp_dir(name: &str) -> PathBuf {
+        let stamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "constitute-gateway-{name}-{}-{stamp}",
+            std::process::id()
+        ))
+    }
 
     #[test]
     fn encrypt_decrypt_roundtrip() {
@@ -355,5 +436,36 @@ mod tests {
         assert_eq!(out.identity_id, "id");
         assert_eq!(out.device_label, "label");
         assert_eq!(out.zones.len(), 1);
+    }
+
+    #[test]
+    fn update_identity_roundtrip_persists_identity_and_label() {
+        let _guard = env_lock().lock().expect("env lock");
+        let _restore = force_passphrase_env("test-pass-update-identity");
+        let data_dir = unique_temp_dir("identity");
+
+        let seed = SecureSeed {
+            device_label: "Gateway Before Pair".to_string(),
+            ..SecureSeed::default()
+        };
+
+        let (initial, _) = load_or_init(data_dir.to_str().expect("dir str"), seed).expect("init");
+        let initial_pk = initial.nostr_pubkey.clone();
+
+        update_identity(
+            data_dir.to_str().expect("dir str"),
+            "id-paired-42",
+            Some("Gateway After Pair"),
+        )
+        .expect("update identity");
+
+        let (updated, _) = load_or_init(data_dir.to_str().expect("dir str"), SecureSeed::default())
+            .expect("reload");
+
+        assert_eq!(updated.nostr_pubkey, initial_pk);
+        assert_eq!(updated.identity_id, "id-paired-42");
+        assert_eq!(updated.device_label, "Gateway After Pair");
+
+        let _ = std::fs::remove_dir_all(&data_dir);
     }
 }

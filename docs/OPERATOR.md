@@ -51,6 +51,7 @@ Pairing code generation occurs only when all conditions are true:
 - Existing pairing material is missing or invalid for the target identity.
 
 On generation, the installer prints the one-time code. Claim it in `Settings > Pairing > Add Device`.
+After approval, the gateway persists the resolved `identity_id` into encrypted keystore state and performs one controlled restart so the paired runtime state is applied cleanly.
 
 ## Advanced CLI Options
 Global options:
