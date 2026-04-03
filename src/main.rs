@@ -911,25 +911,18 @@ async fn main() -> Result<()> {
         load_hosted_services_snapshot(&http_client, &cfg.nostr_pubkey).await;
     let (swarm_tx, swarm_rx) = watch::channel(cfg.swarm_endpoint.clone());
     let (metrics_tx, metrics_rx) = watch::channel(discovery::GatewayMetrics::default());
-    let (hosted_services_tx, hosted_services_rx) = watch::channel(hosted_services_initial);
+    let (hosted_services_tx, hosted_services_rx) = watch::channel(hosted_services_initial.clone());
     let relay_req = discovery::relay_req_json();
     let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<String>();
     let (local_in_tx, mut local_in_rx) = mpsc::unbounded_channel::<Value>();
     let store = Arc::new(Mutex::new(SwarmStoreMap::new()));
     let (udp_in_tx, mut udp_in_rx) = mpsc::unbounded_channel::<transport::UdpInbound>();
-    if !cfg.nostr_pubkey.is_empty() && !cfg.nostr_sk_hex.is_empty() {
-        if let Ok(ev) =
-            build_device_record_event(&cfg.nostr_pubkey, &cfg.nostr_sk_hex, &device_record)
-        {
-            let _ = store.lock().await.put_record_all(&zones, &ev);
-        }
-    }
     // === Network services: relay, discovery publisher, UDP transport ===
     let relay_pool =
         relay::RelayPool::new(cfg.nostr_relays.clone(), relay_req, Some(inbound_tx)).await;
     let discovery_client = discovery::DiscoveryClient::new(
         relay_pool.clone(),
-        device_record,
+        device_record.clone(),
         cfg.nostr_pubkey.clone(),
         cfg.nostr_sk_hex.clone(),
         Duration::from_secs(cfg.nostr_publish_interval_secs),
@@ -1217,6 +1210,13 @@ async fn main() -> Result<()> {
 
     let hosted_services_gateway_pk = cfg.nostr_pubkey.clone();
     let hosted_services_client = http_client.clone();
+    let hosted_services_store = store.clone();
+    let hosted_services_relay_pool = relay_pool.clone();
+    let hosted_services_local_relay = local_relay.clone();
+    let hosted_services_zones = zones.clone();
+    let hosted_services_device_record = device_record.clone();
+    let hosted_services_self_pk = cfg.nostr_pubkey.clone();
+    let hosted_services_self_sk = cfg.nostr_sk_hex.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
         loop {
@@ -1224,9 +1224,20 @@ async fn main() -> Result<()> {
             let snapshot =
                 load_hosted_services_snapshot(&hosted_services_client, &hosted_services_gateway_pk)
                     .await;
-            if hosted_services_tx.send(snapshot).is_err() {
+            if hosted_services_tx.send(snapshot.clone()).is_err() {
                 break;
             }
+            publish_current_device_record(
+                &hosted_services_self_pk,
+                &hosted_services_self_sk,
+                &hosted_services_device_record,
+                &snapshot,
+                &hosted_services_zones,
+                &hosted_services_store,
+                &hosted_services_relay_pool,
+                &hosted_services_local_relay,
+            )
+            .await;
         }
     });
 
@@ -2112,7 +2123,7 @@ fn execute_nvr_install_request(
         c.arg("bash");
         c
     } else {
-        let mut c = Command::new("bash");
+        let c = Command::new("bash");
         c
     };
 
@@ -3770,6 +3781,36 @@ fn build_device_record_event(
         util::now_unix_seconds(),
     );
     nostr::sign_event(&unsigned, sk_hex)
+}
+
+async fn publish_current_device_record(
+    pubkey: &str,
+    sk_hex: &str,
+    base_record: &discovery::SwarmDeviceRecord,
+    hosted_services: &[discovery::HostedServiceRecord],
+    zones: &[String],
+    store: &Arc<Mutex<SwarmStoreMap>>,
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+) {
+    if pubkey.trim().is_empty() || sk_hex.trim().is_empty() {
+        return;
+    }
+    let mut record = base_record.clone();
+    record.hosted_services = hosted_services.to_vec();
+    let Ok(record_ev) = build_device_record_event(pubkey, sk_hex, &record) else {
+        return;
+    };
+    {
+        let mut guard = store.lock().await;
+        let _ = guard.put_record_all(zones, &record_ev);
+    }
+    relay_pool.broadcast(&nostr::frame_event(&record_ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(&record_ev) {
+            local.publish_event(val).await;
+        }
+    }
 }
 
 fn build_dht_record_event(
