@@ -472,6 +472,7 @@ struct HostedNvrService {
     record: discovery::HostedServiceRecord,
     api_base_url: String,
     health: Value,
+    config: HostedNvrConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1759,6 +1760,7 @@ async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Optio
                         },
                         api_base_url,
                         health,
+                        config: cfg.clone(),
                     });
                 }
             } else {
@@ -1805,6 +1807,7 @@ async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Optio
             },
             api_base_url,
             health: json!({}),
+            config: cfg.clone(),
         });
     }
     None
@@ -2600,7 +2603,7 @@ fn build_gateway_managed_launch_status_payload(
         kind: "gateway_managed_launch_status".to_string(),
         request_id: req.request_id.clone(),
         status: status.to_string(),
-        to_device_pk: req.to_device_pk.clone(),
+        to_device_pk: req.device_pk.clone(),
         gateway_pk: gateway_pk.to_string(),
         identity_id: req.identity_id.clone(),
         device_pk: req.device_pk.clone(),
@@ -2627,7 +2630,7 @@ fn build_gateway_signal_status_payload(
         kind: "gateway_signal_status".to_string(),
         request_id: req.request_id.clone(),
         status: status.to_string(),
-        to_device_pk: req.to_device_pk.clone(),
+        to_device_pk: req.device_pk.clone(),
         gateway_pk: gateway_pk.to_string(),
         identity_id: req.identity_id.clone(),
         device_pk: req.device_pk.clone(),
@@ -2672,12 +2675,33 @@ fn service_sources_from_health(health: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+fn service_sources_from_config(cameras: &[Value]) -> Vec<String> {
+    cameras
+        .iter()
+        .filter_map(|entry| {
+            entry.get("source_id")
+                .and_then(|v| v.as_str())
+                .or_else(|| entry.get("sourceId").and_then(|v| v.as_str()))
+                .map(|v| v.trim().to_string())
+        })
+        .filter(|entry| !entry.is_empty())
+        .collect()
+}
+
 fn build_managed_service_display(
     hosted: &HostedNvrService,
     req: &GatewayManagedLaunchRequest,
     stun_servers: &[String],
     turn_servers: &[String],
 ) -> Value {
+    let sources = {
+        let live = service_sources_from_health(&hosted.health);
+        if live.is_empty() {
+            service_sources_from_config(&hosted.config.cameras)
+        } else {
+            live
+        }
+    };
     json!({
         "gatewayPk": hosted.record.host_gateway_pk.clone(),
         "servicePk": hosted.record.device_pk.clone(),
@@ -2686,7 +2710,7 @@ fn build_managed_service_display(
         "service": hosted.record.service.clone(),
         "status": hosted.record.status.clone(),
         "cameraCount": hosted.record.camera_count,
-        "sources": service_sources_from_health(&hosted.health),
+        "sources": sources,
         "cameras": hosted.health.get("cameras").cloned().unwrap_or_else(|| json!([])),
         "sourceRuntime": hosted.health.get("sourceRuntime").cloned().unwrap_or_else(|| json!([])),
         "configuredSources": hosted.health.get("configuredSources").cloned().unwrap_or_else(|| json!(hosted.record.camera_count)),
