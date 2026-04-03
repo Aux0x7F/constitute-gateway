@@ -9,13 +9,15 @@ mod transport;
 mod util;
 
 use crate::swarm_store::{RecordType, SwarmStoreMap};
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{ArgAction, Parser};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
@@ -305,6 +307,193 @@ struct GatewayZoneSyncStatusPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
     ts: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayManagedLaunchRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(rename = "devicePk", default)]
+    device_pk: String,
+    #[serde(rename = "servicePk", default)]
+    service_pk: String,
+    #[serde(default)]
+    service: String,
+    #[serde(default)]
+    capability: String,
+    #[serde(rename = "launchNonce", default)]
+    launch_nonce: String,
+    #[serde(default)]
+    zone: String,
+    #[serde(rename = "appRepo", default)]
+    app_repo: String,
+    #[serde(default)]
+    display: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewayManagedLaunchStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    capability: String,
+    #[serde(rename = "launchToken", skip_serializing_if = "Option::is_none")]
+    launch_token: Option<String>,
+    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewaySignalRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(rename = "devicePk", default)]
+    device_pk: String,
+    #[serde(rename = "servicePk", default)]
+    service_pk: String,
+    #[serde(default)]
+    service: String,
+    #[serde(rename = "signalType", default)]
+    signal_type: String,
+    #[serde(default)]
+    payload: Value,
+    #[serde(rename = "launchToken", default)]
+    launch_token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewaySignalStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    #[serde(rename = "signalType")]
+    signal_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewaySignalPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    #[serde(rename = "signalType")]
+    signal_type: String,
+    payload: Value,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct HostedNvrConfig {
+    #[serde(default)]
+    service_version: String,
+    #[serde(default)]
+    nostr_pubkey: String,
+    #[serde(default)]
+    device_label: String,
+    #[serde(default)]
+    cameras: Vec<Value>,
+    #[serde(default)]
+    api: HostedNvrApiConfig,
+    #[serde(default)]
+    gateway: HostedNvrGatewayConfig,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct HostedNvrApiConfig {
+    #[serde(default)]
+    bind: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct HostedNvrGatewayConfig {
+    #[serde(default, rename = "host_gateway_pk")]
+    host_gateway_pk: String,
+    #[serde(default, rename = "hostGatewayPk")]
+    host_gateway_pk_camel: String,
+}
+
+#[derive(Debug, Clone)]
+struct HostedNvrService {
+    record: discovery::HostedServiceRecord,
+    api_base_url: String,
+    health: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ManagedLaunchTokenPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    capability: String,
+    #[serde(rename = "launchNonce")]
+    launch_nonce: String,
+    #[serde(rename = "issuedAt")]
+    issued_at: u64,
+    #[serde(rename = "expiresAt")]
+    expires_at: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -714,8 +903,15 @@ async fn main() -> Result<()> {
         cfg.release_branch.trim(),
     );
 
+    let http_client = HttpClient::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| HttpClient::new());
+    let hosted_services_initial =
+        load_hosted_services_snapshot(&http_client, &cfg.nostr_pubkey).await;
     let (swarm_tx, swarm_rx) = watch::channel(cfg.swarm_endpoint.clone());
     let (metrics_tx, metrics_rx) = watch::channel(discovery::GatewayMetrics::default());
+    let (hosted_services_tx, hosted_services_rx) = watch::channel(hosted_services_initial);
     let relay_req = discovery::relay_req_json();
     let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<String>();
     let (local_in_tx, mut local_in_rx) = mpsc::unbounded_channel::<Value>();
@@ -740,6 +936,7 @@ async fn main() -> Result<()> {
         zones.clone(),
         swarm_rx,
         metrics_rx,
+        hosted_services_rx,
     );
     tokio::spawn(async move {
         if let Err(err) = discovery_client.run().await {
@@ -1007,6 +1204,9 @@ async fn main() -> Result<()> {
         seen_max: 4096,
         remote_service_install_enabled: cfg.remote_service_install_enabled,
         remote_service_install_timeout_secs: cfg.remote_service_install_timeout_secs.max(60),
+        http_client: http_client.clone(),
+        stun_servers: cfg.stun_servers.clone(),
+        turn_servers: cfg.turn_servers.clone(),
         authorized_control_device_pks: cfg
             .authorized_control_device_pks
             .iter()
@@ -1014,6 +1214,21 @@ async fn main() -> Result<()> {
             .filter(|v| !v.is_empty())
             .collect(),
     };
+
+    let hosted_services_gateway_pk = cfg.nostr_pubkey.clone();
+    let hosted_services_client = http_client.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            let snapshot =
+                load_hosted_services_snapshot(&hosted_services_client, &hosted_services_gateway_pk)
+                    .await;
+            if hosted_services_tx.send(snapshot).is_err() {
+                break;
+            }
+        }
+    });
 
     let ctx_nostr = inbound_ctx.clone();
     tokio::spawn(async move {
@@ -1400,6 +1615,253 @@ fn normalize_gateway_zone_sync_request(req: &mut GatewayZoneSyncRequest) {
     req.extra_zone_keys = dedup_valid_zone_keys(&req.extra_zone_keys, 64);
 }
 
+fn normalize_gateway_managed_launch_request(req: &mut GatewayManagedLaunchRequest) {
+    req.request_id = trim_nonempty(&req.request_id);
+    if req.request_id.is_empty() {
+        req.request_id = make_install_request_id();
+    }
+    req.to_device_pk = trim_nonempty(&req.to_device_pk);
+    req.identity_id = trim_nonempty(&req.identity_id);
+    req.device_pk = trim_nonempty(&req.device_pk);
+    req.service_pk = trim_nonempty(&req.service_pk);
+    req.service = trim_nonempty(&req.service).to_ascii_lowercase();
+    req.capability = trim_nonempty(&req.capability).to_ascii_lowercase();
+    req.launch_nonce = trim_nonempty(&req.launch_nonce);
+    req.zone = trim_nonempty(&req.zone);
+    req.app_repo = trim_nonempty(&req.app_repo);
+}
+
+fn normalize_gateway_signal_request(req: &mut GatewaySignalRequest) {
+    req.request_id = trim_nonempty(&req.request_id);
+    if req.request_id.is_empty() {
+        req.request_id = make_install_request_id();
+    }
+    req.to_device_pk = trim_nonempty(&req.to_device_pk);
+    req.identity_id = trim_nonempty(&req.identity_id);
+    req.device_pk = trim_nonempty(&req.device_pk);
+    req.service_pk = trim_nonempty(&req.service_pk);
+    req.service = trim_nonempty(&req.service).to_ascii_lowercase();
+    req.signal_type = trim_nonempty(&req.signal_type).to_ascii_lowercase();
+    req.launch_token = trim_nonempty(&req.launch_token);
+}
+
+fn nvr_config_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    out.push(PathBuf::from("/etc/constitute-nvr/config.json"));
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        out.push(
+            PathBuf::from(local_appdata)
+                .join("Constitute")
+                .join("nvr")
+                .join("config.json"),
+        );
+    }
+    out
+}
+
+fn nvr_local_base_url(bind: &str) -> Option<String> {
+    let mut raw = bind.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.contains(':') {
+        raw = format!("127.0.0.1:{raw}");
+    }
+    let addr: SocketAddr = raw.parse().ok()?;
+    Some(format!("http://127.0.0.1:{}", addr.port()))
+}
+
+async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Option<HostedNvrService> {
+    for path in nvr_config_candidates() {
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let cfg: HostedNvrConfig = match serde_json::from_str(&raw) {
+            Ok(cfg) => cfg,
+            Err(_) => continue,
+        };
+        let service_pk = cfg.nostr_pubkey.trim().to_string();
+        if service_pk.is_empty() {
+            continue;
+        }
+        let api_base_url = match nvr_local_base_url(&cfg.api.bind) {
+            Some(url) => url,
+            None => continue,
+        };
+
+        let now = util::now_unix_seconds() * 1000;
+        let mut status = "configured".to_string();
+        let mut camera_count = cfg.cameras.len() as u64;
+        if let Ok(resp) = client
+            .get(format!("{api_base_url}/health"))
+            .timeout(Duration::from_secs(3))
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                if let Ok(body) = resp.json::<Value>().await {
+                    status = "online".to_string();
+                    let health = body.clone();
+                    camera_count = body
+                        .get("configuredSources")
+                        .and_then(|v| v.as_u64())
+                        .or_else(|| {
+                            body.get("sources")
+                                .and_then(|v| v.as_array())
+                                .map(|v| v.len() as u64)
+                        })
+                        .unwrap_or(camera_count);
+                    return Some(HostedNvrService {
+                        record: discovery::HostedServiceRecord {
+                            device_pk: service_pk,
+                            device_label: if cfg.device_label.trim().is_empty() {
+                                "Constitute NVR".to_string()
+                            } else {
+                                cfg.device_label.trim().to_string()
+                            },
+                            device_kind: "service".to_string(),
+                            service: "nvr".to_string(),
+                            host_gateway_pk: {
+                                let explicit = cfg.gateway.host_gateway_pk.trim();
+                                if explicit.is_empty() {
+                                    let alt = cfg.gateway.host_gateway_pk_camel.trim();
+                                    if alt.is_empty() {
+                                        gateway_pk.trim()
+                                    } else {
+                                        alt
+                                    }
+                                } else {
+                                    explicit
+                                }
+                            }
+                            .to_string(),
+                            service_version: if cfg.service_version.trim().is_empty() {
+                                env!("CARGO_PKG_VERSION").to_string()
+                            } else {
+                                cfg.service_version.trim().to_string()
+                            },
+                            updated_at: now,
+                            freshness_ms: 0,
+                            status,
+                            camera_count,
+                        },
+                        api_base_url,
+                        health,
+                    });
+                }
+            } else {
+                status = "offline".to_string();
+            }
+        } else {
+            status = "offline".to_string();
+        }
+        let host_gateway_pk = {
+            let explicit = cfg.gateway.host_gateway_pk.trim();
+            if explicit.is_empty() {
+                let alt = cfg.gateway.host_gateway_pk_camel.trim();
+                if alt.is_empty() {
+                    gateway_pk.trim()
+                } else {
+                    alt
+                }
+            } else {
+                explicit
+            }
+        }
+        .to_string();
+
+        return Some(HostedNvrService {
+            record: discovery::HostedServiceRecord {
+                device_pk: service_pk,
+                device_label: if cfg.device_label.trim().is_empty() {
+                    "Constitute NVR".to_string()
+                } else {
+                    cfg.device_label.trim().to_string()
+                },
+                device_kind: "service".to_string(),
+                service: "nvr".to_string(),
+                host_gateway_pk,
+                service_version: if cfg.service_version.trim().is_empty() {
+                    env!("CARGO_PKG_VERSION").to_string()
+                } else {
+                    cfg.service_version.trim().to_string()
+                },
+                updated_at: now,
+                freshness_ms: 0,
+                status,
+                camera_count,
+            },
+            api_base_url,
+            health: json!({}),
+        });
+    }
+    None
+}
+
+async fn load_hosted_services_snapshot(
+    client: &HttpClient,
+    gateway_pk: &str,
+) -> Vec<discovery::HostedServiceRecord> {
+    match load_hosted_nvr_service(client, gateway_pk).await {
+        Some(service) => vec![service.record],
+        None => Vec::new(),
+    }
+}
+
+fn capability_allowed_for_service(service: &str, capability: &str) -> bool {
+    matches!(
+        (service.trim(), capability.trim()),
+        ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.launch_managed_app")
+    )
+}
+
+async fn is_requester_authorized_for_capability(
+    ctx: &InboundContext,
+    requester_pk: &str,
+    identity_id: &str,
+    service: &str,
+    capability: &str,
+) -> bool {
+    if !capability_allowed_for_service(service, capability) {
+        return false;
+    }
+    is_requester_authorized_for_service_install(ctx, requester_pk, identity_id).await
+}
+
+fn build_managed_launch_token(
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &ManagedLaunchTokenPayload,
+) -> Result<String> {
+    let tags = vec![
+        vec!["t".to_string(), "constitute".to_string()],
+        vec!["type".to_string(), "managed_launch_token".to_string()],
+        vec!["service".to_string(), payload.service.clone()],
+        vec!["p".to_string(), payload.device_pk.clone()],
+        vec!["p".to_string(), payload.service_pk.clone()],
+    ];
+    let unsigned = nostr::build_unsigned_event(
+        pubkey,
+        27235,
+        tags,
+        serde_json::to_string(payload)?,
+        util::now_unix_seconds(),
+    );
+    let ev = nostr::sign_event(&unsigned, sk_hex)?;
+    Ok(serde_json::to_string(&ev)?)
+}
+
+fn parse_managed_launch_token(token: &str) -> Result<(nostr::NostrEvent, ManagedLaunchTokenPayload)> {
+    let ev: nostr::NostrEvent = serde_json::from_str(token).context("invalid launch token json")?;
+    if !nostr::verify_event(&ev)? {
+        return Err(anyhow!("invalid launch token signature"));
+    }
+    let payload: ManagedLaunchTokenPayload =
+        serde_json::from_str(&ev.content).context("invalid launch token payload")?;
+    Ok((ev, payload))
+}
+
 async fn publish_gateway_service_install_status(
     relay_pool: &relay::RelayPool,
     local_relay: &Option<local_relay::LocalRelayHandle>,
@@ -1427,6 +1889,69 @@ async fn publish_gateway_zone_sync_status(
     pubkey: &str,
     sk_hex: &str,
     payload: &GatewayZoneSyncStatusPayload,
+) -> Result<()> {
+    if pubkey.is_empty() || sk_hex.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(payload)?;
+    let ev = build_app_event(pubkey, sk_hex, &value)?;
+    relay_pool.broadcast(&nostr::frame_event(&ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(ev) {
+            local.publish_event(val).await;
+        }
+    }
+    Ok(())
+}
+
+async fn publish_gateway_managed_launch_status(
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &GatewayManagedLaunchStatusPayload,
+) -> Result<()> {
+    if pubkey.is_empty() || sk_hex.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(payload)?;
+    let ev = build_app_event(pubkey, sk_hex, &value)?;
+    relay_pool.broadcast(&nostr::frame_event(&ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(ev) {
+            local.publish_event(val).await;
+        }
+    }
+    Ok(())
+}
+
+async fn publish_gateway_signal_status(
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &GatewaySignalStatusPayload,
+) -> Result<()> {
+    if pubkey.is_empty() || sk_hex.is_empty() {
+        return Ok(());
+    }
+    let value = serde_json::to_value(payload)?;
+    let ev = build_app_event(pubkey, sk_hex, &value)?;
+    relay_pool.broadcast(&nostr::frame_event(&ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(ev) {
+            local.publish_event(val).await;
+        }
+    }
+    Ok(())
+}
+
+async fn publish_gateway_signal(
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+    pubkey: &str,
+    sk_hex: &str,
+    payload: &GatewaySignalPayload,
 ) -> Result<()> {
     if pubkey.is_empty() || sk_hex.is_empty() {
         return Ok(());
@@ -2050,6 +2575,167 @@ fn build_gateway_zone_sync_status_payload(
     }
 }
 
+fn build_gateway_managed_launch_status_payload(
+    req: &GatewayManagedLaunchRequest,
+    gateway_pk: &str,
+    status: &str,
+    launch_token: Option<String>,
+    expires_at: Option<u64>,
+    display: Option<Value>,
+    reason: Option<String>,
+    detail: Option<String>,
+) -> GatewayManagedLaunchStatusPayload {
+    GatewayManagedLaunchStatusPayload {
+        kind: "gateway_managed_launch_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.to_device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        capability: req.capability.clone(),
+        launch_token,
+        expires_at,
+        display,
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
+    }
+}
+
+fn build_gateway_signal_status_payload(
+    req: &GatewaySignalRequest,
+    gateway_pk: &str,
+    status: &str,
+    reason: Option<String>,
+    detail: Option<String>,
+) -> GatewaySignalStatusPayload {
+    GatewaySignalStatusPayload {
+        kind: "gateway_signal_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.to_device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        signal_type: req.signal_type.clone(),
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
+    }
+}
+
+fn build_gateway_signal_payload(
+    req: &GatewaySignalRequest,
+    gateway_pk: &str,
+    payload: Value,
+) -> GatewaySignalPayload {
+    GatewaySignalPayload {
+        kind: "gateway_signal".to_string(),
+        request_id: req.request_id.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        signal_type: req.signal_type.clone(),
+        payload,
+        ts: util::now_unix_seconds() * 1000,
+    }
+}
+
+fn service_sources_from_health(health: &Value) -> Vec<String> {
+    health
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| entry.as_str().map(|v| v.trim().to_string()))
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn build_managed_service_display(
+    hosted: &HostedNvrService,
+    req: &GatewayManagedLaunchRequest,
+    stun_servers: &[String],
+    turn_servers: &[String],
+) -> Value {
+    json!({
+        "gatewayPk": hosted.record.host_gateway_pk.clone(),
+        "servicePk": hosted.record.device_pk.clone(),
+        "serviceLabel": hosted.record.device_label.clone(),
+        "serviceVersion": hosted.record.service_version.clone(),
+        "service": hosted.record.service.clone(),
+        "status": hosted.record.status.clone(),
+        "cameraCount": hosted.record.camera_count,
+        "sources": service_sources_from_health(&hosted.health),
+        "cameras": hosted.health.get("cameras").cloned().unwrap_or_else(|| json!([])),
+        "sourceRuntime": hosted.health.get("sourceRuntime").cloned().unwrap_or_else(|| json!([])),
+        "configuredSources": hosted.health.get("configuredSources").cloned().unwrap_or_else(|| json!(hosted.record.camera_count)),
+        "iceServers": {
+            "stun": stun_servers,
+            "turn": turn_servers,
+        },
+        "appRepo": req.app_repo.clone(),
+        "requestDisplay": req.display.clone(),
+    })
+}
+
+async fn load_target_hosted_service(
+    ctx: &InboundContext,
+    service_pk: &str,
+    service: &str,
+) -> Result<HostedNvrService> {
+    let service_slug = service.trim().to_ascii_lowercase();
+    if service_slug != "nvr" {
+        return Err(anyhow!("unsupported managed service"));
+    }
+    let hosted = load_hosted_nvr_service(&ctx.http_client, &ctx.self_pk)
+        .await
+        .ok_or_else(|| anyhow!("hosted nvr service not configured"))?;
+    if !service_pk.trim().is_empty() && hosted.record.device_pk.trim() != service_pk.trim() {
+        return Err(anyhow!("requested service pk does not match hosted service"));
+    }
+    Ok(hosted)
+}
+
+fn validate_managed_launch_token_for_request(
+    ctx: &InboundContext,
+    req: &GatewaySignalRequest,
+) -> Result<ManagedLaunchTokenPayload> {
+    let (event, token) = parse_managed_launch_token(&req.launch_token)?;
+    if event.pubkey.trim() != ctx.self_pk.trim() {
+        return Err(anyhow!("launch token not signed by this gateway"));
+    }
+    let now_ms = util::now_unix_seconds() * 1000;
+    if token.expires_at < now_ms {
+        return Err(anyhow!("launch token expired"));
+    }
+    if token.gateway_pk.trim() != ctx.self_pk.trim() {
+        return Err(anyhow!("launch token gateway mismatch"));
+    }
+    if token.identity_id.trim() != req.identity_id.trim() {
+        return Err(anyhow!("launch token identity mismatch"));
+    }
+    if token.device_pk.trim() != req.device_pk.trim() {
+        return Err(anyhow!("launch token device mismatch"));
+    }
+    if token.service_pk.trim() != req.service_pk.trim() {
+        return Err(anyhow!("launch token service mismatch"));
+    }
+    if token.service.trim() != req.service.trim() {
+        return Err(anyhow!("launch token service slug mismatch"));
+    }
+    Ok(token)
+}
+
 async fn handle_gateway_service_install_request(
     ctx: &InboundContext,
     nostr_ev: &nostr::NostrEvent,
@@ -2592,6 +3278,480 @@ async fn handle_gateway_zone_sync_request(
     }
 }
 
+async fn handle_gateway_managed_launch_request(
+    ctx: &InboundContext,
+    nostr_ev: &nostr::NostrEvent,
+    payload: &Value,
+) {
+    let mut req: GatewayManagedLaunchRequest = match serde_json::from_value(payload.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            warn!(error = %err, "invalid gateway_managed_launch_request payload");
+            return;
+        }
+    };
+    normalize_gateway_managed_launch_request(&mut req);
+
+    if req.to_device_pk != ctx.self_pk {
+        return;
+    }
+
+    if req.service.is_empty() {
+        req.service = "nvr".to_string();
+    }
+    if req.capability.is_empty() {
+        req.capability = "nvr.view".to_string();
+    }
+    if req.app_repo.is_empty() {
+        req.app_repo = "constitute-nvr-ui".to_string();
+    }
+
+    let requester_pk = nostr_ev.pubkey.trim().to_string();
+    if req.device_pk.is_empty() {
+        req.device_pk = requester_pk.clone();
+    }
+
+    let publish_status =
+        |status: &str,
+         launch_token: Option<String>,
+         expires_at: Option<u64>,
+         display: Option<Value>,
+         reason: Option<String>,
+         detail: Option<String>| {
+            build_gateway_managed_launch_status_payload(
+                &req,
+                &ctx.self_pk,
+                status,
+                launch_token,
+                expires_at,
+                display,
+                reason,
+                detail,
+            )
+        };
+
+    if requester_pk != req.device_pk {
+        let status = publish_status(
+            "rejected",
+            None,
+            None,
+            None,
+            Some("requester_device_mismatch".to_string()),
+            Some("requesting event pubkey does not match devicePk".to_string()),
+        );
+        let _ = publish_gateway_managed_launch_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let gateway_identity = ctx.gateway_identity_id.trim();
+    if gateway_identity.is_empty() || req.identity_id.trim() != gateway_identity {
+        let status = publish_status(
+            "rejected",
+            None,
+            None,
+            None,
+            Some("identity_mismatch".to_string()),
+            Some("request identity does not match gateway identity".to_string()),
+        );
+        let _ = publish_gateway_managed_launch_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if !is_requester_authorized_for_capability(
+        ctx,
+        &requester_pk,
+        &req.identity_id,
+        &req.service,
+        &req.capability,
+    )
+    .await
+    {
+        let status = publish_status(
+            "rejected",
+            None,
+            None,
+            None,
+            Some("unauthorized_requester".to_string()),
+            Some("requester is not authorized for requested capability".to_string()),
+        );
+        let _ = publish_gateway_managed_launch_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let hosted = match load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
+        Ok(service) => service,
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                None,
+                None,
+                None,
+                Some("service_unavailable".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_managed_launch_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let mut launch_req = req.clone();
+    launch_req.service_pk = hosted.record.device_pk.clone();
+    if launch_req.launch_nonce.is_empty() {
+        launch_req.launch_nonce = random_hex(8);
+    }
+
+    let issued_at = util::now_unix_seconds() * 1000;
+    let expires_at = issued_at + 120_000;
+    let token_payload = ManagedLaunchTokenPayload {
+        kind: "managed_launch_token".to_string(),
+        gateway_pk: ctx.self_pk.clone(),
+        service_pk: launch_req.service_pk.clone(),
+        service: launch_req.service.clone(),
+        identity_id: launch_req.identity_id.clone(),
+        device_pk: launch_req.device_pk.clone(),
+        capability: launch_req.capability.clone(),
+        launch_nonce: launch_req.launch_nonce.clone(),
+        issued_at,
+        expires_at,
+    };
+    let launch_token = match build_managed_launch_token(&ctx.self_pk, &ctx.self_sk, &token_payload) {
+        Ok(token) => token,
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                None,
+                None,
+                None,
+                Some("token_build_failed".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_managed_launch_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let display = build_managed_service_display(
+        &hosted,
+        &launch_req,
+        &ctx.stun_servers,
+        &ctx.turn_servers,
+    );
+    let status = build_gateway_managed_launch_status_payload(
+        &launch_req,
+        &ctx.self_pk,
+        "complete",
+        Some(launch_token),
+        Some(expires_at),
+        Some(display),
+        None,
+        None,
+    );
+    let _ = publish_gateway_managed_launch_status(
+        &ctx.relay_pool,
+        &ctx.local_relay,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        &status,
+    )
+    .await;
+}
+
+async fn handle_gateway_signal_request(
+    ctx: &InboundContext,
+    nostr_ev: &nostr::NostrEvent,
+    payload: &Value,
+) {
+    let mut req: GatewaySignalRequest = match serde_json::from_value(payload.clone()) {
+        Ok(req) => req,
+        Err(err) => {
+            warn!(error = %err, "invalid gateway_signal_request payload");
+            return;
+        }
+    };
+    normalize_gateway_signal_request(&mut req);
+
+    if req.to_device_pk != ctx.self_pk {
+        return;
+    }
+
+    if req.service.is_empty() {
+        req.service = "nvr".to_string();
+    }
+    let requester_pk = nostr_ev.pubkey.trim().to_string();
+    if req.device_pk.is_empty() {
+        req.device_pk = requester_pk.clone();
+    }
+
+    let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
+        build_gateway_signal_status_payload(&req, &ctx.self_pk, status, reason, detail)
+    };
+
+    if requester_pk != req.device_pk {
+        let status = publish_status(
+            "rejected",
+            Some("requester_device_mismatch".to_string()),
+            Some("requesting event pubkey does not match devicePk".to_string()),
+        );
+        let _ = publish_gateway_signal_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let token = match validate_managed_launch_token_for_request(ctx, &req) {
+        Ok(token) => token,
+        Err(err) => {
+            let status = publish_status(
+                "rejected",
+                Some("invalid_launch_token".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    if !is_requester_authorized_for_capability(
+        ctx,
+        &requester_pk,
+        &req.identity_id,
+        &req.service,
+        &token.capability,
+    )
+    .await
+    {
+        let status = publish_status(
+            "rejected",
+            Some("unauthorized_requester".to_string()),
+            Some("requester is not authorized for launch capability".to_string()),
+        );
+        let _ = publish_gateway_signal_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    let hosted = match load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
+        Ok(service) => service,
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                Some("service_unavailable".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let accepted = publish_status("accepted", None, None);
+    let _ = publish_gateway_signal_status(
+        &ctx.relay_pool,
+        &ctx.local_relay,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        &accepted,
+    )
+    .await;
+
+    let url = match req.signal_type.as_str() {
+        "offer" => format!("{}/managed/offer", hosted.api_base_url),
+        "session_close" => format!("{}/managed/close", hosted.api_base_url),
+        _ => {
+            let status = publish_status(
+                "rejected",
+                Some("unsupported_signal".to_string()),
+                Some("only offer and session_close are supported".to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let request_body = if req.signal_type == "offer" {
+        json!({
+            "launchToken": req.launch_token.clone(),
+            "offer": req.payload.clone(),
+            "iceServers": {
+                "stun": ctx.stun_servers.clone(),
+                "turn": ctx.turn_servers.clone(),
+            }
+        })
+    } else {
+        json!({
+            "launchToken": req.launch_token.clone(),
+            "payload": req.payload.clone(),
+        })
+    };
+
+    let response = ctx.http_client.post(&url).json(&request_body).send().await;
+    let response = match response {
+        Ok(resp) => resp,
+        Err(err) => {
+            let status = publish_status(
+                "failed",
+                Some("service_signal_failed".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+
+    let response_status = response.status();
+    if !response_status.is_success() {
+        let detail = match response.text().await {
+            Ok(text) if !text.trim().is_empty() => text,
+            _ => format!("status {}", response_status),
+        };
+        let status = publish_status(
+            "failed",
+            Some("service_signal_rejected".to_string()),
+            Some(detail),
+        );
+        let _ = publish_gateway_signal_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
+    if req.signal_type == "offer" {
+        let body: Value = match response.json().await {
+            Ok(body) => body,
+            Err(err) => {
+                let status = publish_status(
+                    "failed",
+                    Some("invalid_service_signal_response".to_string()),
+                    Some(err.to_string()),
+                );
+                let _ = publish_gateway_signal_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
+                return;
+            }
+        };
+        let signal_type = body
+            .get("signalType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("answer")
+            .trim()
+            .to_ascii_lowercase();
+        let payload_value = if body.is_object() {
+            body.clone()
+        } else {
+            body.get("payload")
+                .cloned()
+                .or_else(|| body.get("answer").cloned())
+                .unwrap_or_else(|| json!({}))
+        };
+        let signal = GatewaySignalPayload {
+            signal_type,
+            ..build_gateway_signal_payload(&req, &ctx.self_pk, payload_value)
+        };
+        let _ = publish_gateway_signal(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &signal,
+        )
+        .await;
+    }
+
+    let status = publish_status("complete", None, None);
+    let _ = publish_gateway_signal_status(
+        &ctx.relay_pool,
+        &ctx.local_relay,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        &status,
+    )
+    .await;
+}
+
 fn build_device_record_event(
     pubkey: &str,
     sk_hex: &str,
@@ -2784,6 +3944,11 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
             | "gateway_service_install_status"
             | "gateway_zone_sync_request"
             | "gateway_zone_sync_status"
+            | "gateway_managed_launch_request"
+            | "gateway_managed_launch_status"
+            | "gateway_signal_request"
+            | "gateway_signal_status"
+            | "gateway_signal"
     )
 }
 
@@ -2889,6 +4054,9 @@ struct InboundContext {
     seen_max: usize,
     remote_service_install_enabled: bool,
     remote_service_install_timeout_secs: u64,
+    http_client: HttpClient,
+    stun_servers: Vec<String>,
+    turn_servers: Vec<String>,
     authorized_control_device_pks: HashSet<String>,
 }
 
@@ -3303,6 +4471,16 @@ async fn process_inbound_event(
 
         if kind == "gateway_zone_sync_request" {
             handle_gateway_zone_sync_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_managed_launch_request" {
+            handle_gateway_managed_launch_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_signal_request" {
+            handle_gateway_signal_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
@@ -4281,6 +5459,9 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
         };
 
@@ -4466,6 +5647,9 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
         };
 
@@ -4608,6 +5792,9 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
         };
 

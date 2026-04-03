@@ -17,6 +17,8 @@ fn discovery_envelope_shape() {
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
     let (_metrics_tx, metrics_rx) =
         tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
+    let (_hosted_tx, hosted_rx) =
+        tokio::sync::watch::channel(Vec::<constitute_gateway::discovery::HostedServiceRecord>::new());
     let client = constitute_gateway::discovery::DiscoveryClient::new(
         constitute_gateway::relay::RelayPool::empty(),
         record,
@@ -26,6 +28,7 @@ fn discovery_envelope_shape() {
         vec!["zonekey".to_string()],
         rx,
         metrics_rx,
+        hosted_rx,
     );
     let json = client.test_envelope_json();
     let v: Value = serde_json::from_str(&json).expect("valid json");
@@ -74,6 +77,8 @@ fn zone_presence_envelope_shape() {
     let (_tx, rx) = tokio::sync::watch::channel("".to_string());
     let (_metrics_tx, metrics_rx) =
         tokio::sync::watch::channel(constitute_gateway::discovery::GatewayMetrics::default());
+    let (_hosted_tx, hosted_rx) =
+        tokio::sync::watch::channel(Vec::<constitute_gateway::discovery::HostedServiceRecord>::new());
     let client = constitute_gateway::discovery::DiscoveryClient::new(
         constitute_gateway::relay::RelayPool::empty(),
         record,
@@ -83,6 +88,7 @@ fn zone_presence_envelope_shape() {
         vec!["zonekey".to_string()],
         rx,
         metrics_rx,
+        hosted_rx,
     );
     let json = client.test_zone_presence_json("zonekey");
     let v: Value = serde_json::from_str(&json).expect("valid json");
