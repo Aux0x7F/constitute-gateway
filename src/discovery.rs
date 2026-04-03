@@ -424,6 +424,7 @@ mod tests {
 
         let json = record.to_json();
         assert!(json.contains("\"deviceKind\":\"service\""));
+        assert!(json.contains("\"relays\":[\"ws://gateway.example:7447\"]"));
         assert!(json.contains("\"hostedServices\":["));
         assert!(json.contains("\"service\":\"nvr\""));
     }

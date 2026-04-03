@@ -108,6 +108,38 @@ function Normalize-Config {
         $cfg | Add-Member -NotePropertyName data_dir -NotePropertyValue $resolved -Force
     }
 
+    $defaultRelays = @('wss://nos.lol', 'wss://relay.primal.net', 'wss://nostr.mom')
+    $legacyRelays = @('wss://relay.snort.social', 'wss://relay.damus.io')
+    $existingRelays = @()
+    if ($null -ne $cfg.nostr_relays) {
+        $existingRelays = @($cfg.nostr_relays | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $hasCustomRelay = ($existingRelays | Where-Object { $_ -notin $legacyRelays }).Count -gt 0
+    if ($existingRelays.Count -eq 0 -or -not $hasCustomRelay) {
+        $cfg | Add-Member -NotePropertyName nostr_relays -NotePropertyValue $defaultRelays -Force
+    }
+
+    $existingAdvertise = @()
+    if ($null -ne $cfg.advertise_relays) {
+        $existingAdvertise = @($cfg.advertise_relays | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+    $placeholderAdvertise = $existingAdvertise | Where-Object { $_ -match 'gateway\.example|replace-host|\.example(?::|/|$)' }
+    $needsAdvertise = $existingAdvertise.Count -eq 0 -or $placeholderAdvertise.Count -eq $existingAdvertise.Count
+    if ($needsAdvertise) {
+        $defaultRoute = Get-NetRoute -DestinationPrefix '0.0.0.0/0' -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Sort-Object RouteMetric, InterfaceMetric |
+            Select-Object -First 1
+        $lanIp = $null
+        if ($defaultRoute) {
+            $lanIp = Get-NetIPAddress -InterfaceIndex $defaultRoute.InterfaceIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+                Where-Object { $_.IPAddress -and $_.IPAddress -notlike '169.254*' } |
+                Select-Object -First 1 -ExpandProperty IPAddress
+        }
+        if (-not [string]::IsNullOrWhiteSpace($lanIp)) {
+            $cfg | Add-Member -NotePropertyName advertise_relays -NotePropertyValue @("ws://$lanIp:7447") -Force
+        }
+    }
+
     $existingIdentity = [string]$cfg.pair_identity_label
     $existingCode = [string]$cfg.pair_code
     $existingHash = [string]$cfg.pair_code_hash
