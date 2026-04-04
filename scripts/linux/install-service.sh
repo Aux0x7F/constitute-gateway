@@ -156,7 +156,7 @@ DEFAULT_NOSTR_RELAYS="wss://nos.lol,wss://relay.primal.net,wss://nostr.mom"
 LAN_RELAY_IP=""
 RELAY_PORT="7447"
 if command -v ip >/dev/null 2>&1; then
-  LAN_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i == \"src\") { print $(i+1); exit }}')"
+  LAN_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i == "src") { print $(i+1); exit }}')"
 fi
 
 if [[ -f "$CONFIG_DIR/config.json" ]]; then
