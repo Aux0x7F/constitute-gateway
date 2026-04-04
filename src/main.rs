@@ -1657,6 +1657,14 @@ fn normalize_gateway_signal_request(req: &mut GatewaySignalRequest) {
     req.launch_token = trim_nonempty(&req.launch_token);
 }
 
+fn gateway_offer_candidates(payload: &Value) -> Value {
+    payload
+        .get("candidates")
+        .cloned()
+        .filter(|value| value.is_array())
+        .unwrap_or_else(|| Value::Array(Vec::new()))
+}
+
 fn nvr_config_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     out.push(PathBuf::from("/etc/constitute-nvr/config.json"));
@@ -3670,9 +3678,11 @@ async fn handle_gateway_signal_request(
     };
 
     let request_body = if req.signal_type == "offer" {
+        let offer_candidates = gateway_offer_candidates(&req.payload);
         json!({
             "launchToken": req.launch_token.clone(),
             "offer": req.payload.clone(),
+            "candidates": offer_candidates,
             "iceServers": {
                 "stun": ctx.stun_servers.clone(),
                 "turn": ctx.turn_servers.clone(),
@@ -5415,6 +5425,26 @@ mod tests {
             &zone_keys,
         );
         assert_eq!(fallback, vec!["zone-a".to_string()]);
+    }
+
+    #[test]
+    fn gateway_offer_candidates_reads_nested_browser_offer_candidates() {
+        let payload = json!({
+            "description": {
+                "type": "offer",
+                "sdp": "v=0\r\n",
+            },
+            "candidates": [
+                {
+                    "candidate": "candidate:1 1 udp 2122260223 10.0.229.73 54547 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0,
+                }
+            ],
+        });
+
+        let candidates = gateway_offer_candidates(&payload);
+        assert_eq!(candidates.as_array().map(|items| items.len()), Some(1));
     }
 
     #[tokio::test]
