@@ -152,13 +152,21 @@ if [[ -n "$CONFIG_TEMPLATE" && -f "$CONFIG_TEMPLATE" && ! -f "$CONFIG_DIR/config
   run_sudo install -m 0644 "$CONFIG_TEMPLATE" "$CONFIG_DIR/config.json"
 fi
 
+DEFAULT_NOSTR_RELAYS="wss://nos.lol,wss://relay.primal.net,wss://nostr.mom"
+LAN_RELAY_IP=""
+RELAY_PORT="7447"
+if command -v ip >/dev/null 2>&1; then
+  LAN_RELAY_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i == "src") { print $(i+1); exit }}')"
+fi
+
 if [[ -f "$CONFIG_DIR/config.json" ]]; then
   if ! command -v python3 >/dev/null 2>&1; then
     echo "python3 is required to normalize config data_dir" >&2
     exit 1
   fi
-  run_sudo python3 - "$CONFIG_DIR/config.json" "$DATA_DIR" <<'PY'
+  run_sudo env DEFAULT_NOSTR_RELAYS="$DEFAULT_NOSTR_RELAYS" LAN_RELAY_IP="$LAN_RELAY_IP" RELAY_PORT="$RELAY_PORT" python3 - "$CONFIG_DIR/config.json" "$DATA_DIR" <<'PY'
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -178,6 +186,26 @@ elif normalized.startswith("/"):
     cfg["data_dir"] = normalized
 else:
     cfg["data_dir"] = f"{state_root}/{normalized.lstrip('./')}"
+
+default_relays = [item.strip() for item in os.environ.get("DEFAULT_NOSTR_RELAYS", "").split(",") if item.strip()]
+existing_relays = [str(item).strip() for item in cfg.get("nostr_relays", []) if str(item).strip()]
+legacy_defaults = {"wss://relay.snort.social", "wss://relay.damus.io"}
+if not existing_relays or set(existing_relays).issubset(legacy_defaults):
+    cfg["nostr_relays"] = default_relays
+
+relay_port = str(os.environ.get("RELAY_PORT", "7447")).strip() or "7447"
+host_ip = str(os.environ.get("LAN_RELAY_IP", "")).strip()
+existing_advertise = [str(item).strip() for item in cfg.get("advertise_relays", []) if str(item).strip()]
+placeholder_hosts = {"gateway.example", "replace-host"}
+
+def relay_is_placeholder(url: str) -> bool:
+    if not url:
+        return True
+    lowered = url.lower()
+    return any(host in lowered for host in placeholder_hosts) or lowered.endswith(".example:7447")
+
+if host_ip and (not existing_advertise or all(relay_is_placeholder(item) for item in existing_advertise)):
+    cfg["advertise_relays"] = [f"ws://{host_ip}:{relay_port}"]
 
 with cfg_path.open("w", encoding="utf-8") as f:
     json.dump(cfg, f, indent=2)

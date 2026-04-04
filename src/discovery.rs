@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -68,6 +69,24 @@ pub struct GatewayMetrics {
     pub ts: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct HostedServiceRecord {
+    pub device_pk: String,
+    pub device_label: String,
+    pub device_kind: String,
+    pub service: String,
+    pub host_gateway_pk: String,
+    pub service_version: String,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub freshness_ms: u64,
+    #[serde(default)]
+    pub status: String,
+    #[serde(default)]
+    pub camera_count: u64,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SwarmDeviceRecord {
@@ -77,6 +96,12 @@ pub struct SwarmDeviceRecord {
     pub updated_at: u64,
     pub expires_at: u64,
     pub role: String,
+    #[serde(default = "default_device_kind")]
+    pub device_kind: String,
+    #[serde(default)]
+    pub service: String,
+    #[serde(default)]
+    pub host_gateway_pk: String,
     #[serde(default)]
     pub relays: Vec<String>,
     #[serde(default)]
@@ -89,6 +114,10 @@ pub struct SwarmDeviceRecord {
     pub release_track: String,
     #[serde(default)]
     pub release_branch: String,
+    #[serde(default)]
+    pub freshness_ms: u64,
+    #[serde(default)]
+    pub hosted_services: Vec<HostedServiceRecord>,
 }
 
 impl SwarmDeviceRecord {
@@ -111,17 +140,48 @@ impl SwarmDeviceRecord {
             updated_at: now,
             expires_at: now + RECORD_TTL_MS,
             role: role.to_string(),
+            device_kind: default_device_kind(),
+            service: String::new(),
+            host_gateway_pk: String::new(),
             relays,
             host_platform: host_platform.to_string(),
             service_version: service_version(),
             release_channel: release_channel.to_string(),
             release_track: release_track.to_string(),
             release_branch: release_branch.to_string(),
+            freshness_ms: 0,
+            hosted_services: Vec::new(),
         }
     }
 
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self).unwrap_or_else(|_| "{}".to_string())
+        serde_json::to_string(&self.as_json_value()).unwrap_or_else(|_| "{}".to_string())
+    }
+
+    fn as_json_value(&self) -> serde_json::Value {
+        json!({
+            "devicePk": self.device_pk,
+            "identityId": self.identity_id,
+            "deviceLabel": self.device_label,
+            "updatedAt": self.updated_at,
+            "expiresAt": self.expires_at,
+            "role": self.role,
+            "deviceKind": self.device_kind,
+            "service": self.service,
+            "hostGatewayPk": self.host_gateway_pk,
+            "relays": self.relays,
+            "hostPlatform": self.host_platform,
+            "serviceVersion": self.service_version,
+            "releaseChannel": self.release_channel,
+            "releaseTrack": self.release_track,
+            "releaseBranch": self.release_branch,
+            "freshnessMs": self.freshness_ms,
+            "hostedServices": self
+                .hosted_services
+                .iter()
+                .map(HostedServiceRecord::as_json_value)
+                .collect::<Vec<_>>(),
+        })
     }
 }
 
@@ -163,6 +223,24 @@ pub struct DiscoveryClient {
     zones: Vec<String>,
     swarm_endpoint_rx: watch::Receiver<String>,
     metrics_rx: watch::Receiver<GatewayMetrics>,
+    hosted_services_rx: watch::Receiver<Vec<HostedServiceRecord>>,
+}
+
+impl HostedServiceRecord {
+    fn as_json_value(&self) -> serde_json::Value {
+        json!({
+            "devicePk": self.device_pk,
+            "deviceLabel": self.device_label,
+            "deviceKind": self.device_kind,
+            "service": self.service,
+            "hostGatewayPk": self.host_gateway_pk,
+            "serviceVersion": self.service_version,
+            "updatedAt": self.updated_at,
+            "freshnessMs": self.freshness_ms,
+            "status": self.status,
+            "cameraCount": self.camera_count,
+        })
+    }
 }
 
 impl DiscoveryClient {
@@ -175,6 +253,7 @@ impl DiscoveryClient {
         zones: Vec<String>,
         swarm_endpoint_rx: watch::Receiver<String>,
         metrics_rx: watch::Receiver<GatewayMetrics>,
+        hosted_services_rx: watch::Receiver<Vec<HostedServiceRecord>>,
     ) -> Self {
         Self {
             pool,
@@ -185,6 +264,7 @@ impl DiscoveryClient {
             zones,
             swarm_endpoint_rx,
             metrics_rx,
+            hosted_services_rx,
         }
     }
 
@@ -219,12 +299,17 @@ impl DiscoveryClient {
     }
 
     fn device_record_json(&self) -> Result<String> {
+        let mut record = self.device_record.clone();
+        let now = now_ms();
+        record.updated_at = now;
+        record.expires_at = now + RECORD_TTL_MS;
+        record.hosted_services = self.hosted_services_rx.borrow().clone();
         let tags = vec![
             vec!["t".to_string(), DEFAULT_RECORD_TAG.to_string()],
             vec!["type".to_string(), "device".to_string()],
-            vec!["role".to_string(), self.device_record.role.clone()],
+            vec!["role".to_string(), record.role.clone()],
         ];
-        let content = self.device_record.to_json();
+        let content = record.to_json();
         let unsigned = nostr::build_unsigned_event(
             &self.nostr_pubkey,
             DEFAULT_RECORD_KIND,
@@ -291,6 +376,10 @@ fn default_service_version() -> String {
     service_version()
 }
 
+fn default_device_kind() -> String {
+    "service".to_string()
+}
+
 fn default_release_channel() -> String {
     "release".to_string()
 }
@@ -301,4 +390,42 @@ fn default_release_track() -> String {
 
 pub fn service_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HostedServiceRecord, SwarmDeviceRecord};
+
+    #[test]
+    fn device_record_json_keeps_device_kind_and_hosted_services() {
+        let mut record = SwarmDeviceRecord::new(
+            "gateway-pk",
+            "identity-id",
+            "DevGateway",
+            "gateway",
+            vec!["ws://gateway.example:7447".to_string()],
+            "linux",
+            "release",
+            "latest",
+            "",
+        );
+        record.hosted_services.push(HostedServiceRecord {
+            device_pk: "service-pk".to_string(),
+            device_label: "Constitute NVR".to_string(),
+            device_kind: "service".to_string(),
+            service: "nvr".to_string(),
+            host_gateway_pk: "gateway-pk".to_string(),
+            service_version: "0.1.0".to_string(),
+            updated_at: 123,
+            freshness_ms: 0,
+            status: "online".to_string(),
+            camera_count: 1,
+        });
+
+        let json = record.to_json();
+        assert!(json.contains("\"deviceKind\":\"service\""));
+        assert!(json.contains("\"relays\":[\"ws://gateway.example:7447\"]"));
+        assert!(json.contains("\"hostedServices\":["));
+        assert!(json.contains("\"service\":\"nvr\""));
+    }
 }
