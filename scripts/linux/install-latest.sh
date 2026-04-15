@@ -3,6 +3,7 @@ set -euo pipefail
 
 REPO_OWNER="${REPO_OWNER:-Aux0x7F}"
 REPO_NAME="${REPO_NAME:-constitute-gateway}"
+REPO_REF="${REPO_REF:-main}"
 SETUP_TIMER=0
 # Production-safe default. Keep this moderate to avoid noisy release polling.
 TIMER_INTERVAL="${TIMER_INTERVAL:-30m}"
@@ -30,6 +31,7 @@ Install or update constitute-gateway Linux artifact from GitHub Releases.
 Options:
   --repo-owner <owner>       GitHub owner (default: Aux0x7F)
   --repo-name <name>         GitHub repo (default: constitute-gateway)
+  --repo-ref <ref>           Git ref for updater script fetches (default: main)
   --pair-identity <label>    Identity label for pairing enrollment
   --pair-generate            Generate one-time pairing code when pairing is needed
   --setup-timer              Install and enable systemd timer for periodic updates
@@ -123,8 +125,8 @@ download_with_retry() {
 }
 
 setup_update_timer() {
-  local persisted_args=(--repo-owner "$REPO_OWNER" --repo-name "$REPO_NAME")
-  local persisted_args_str=""
+  local persisted_args=(--repo-owner "$REPO_OWNER" --repo-name "$REPO_NAME" --repo-ref "$REPO_REF")
+  local raw_script_url="https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/${REPO_REF}/scripts/linux/install-latest.sh"
 
   if [[ "$DEV_POLL" -eq 1 ]]; then
     persisted_args+=(--dev-poll)
@@ -141,15 +143,45 @@ setup_update_timer() {
     persisted_args+=(--no-tor-rotate)
   fi
 
-  printf -v persisted_args_str ' %q' "${persisted_args[@]}"
-
   run_sudo mkdir -p "$INSTALL_DIR"
-
-  run_sudo tee "$UPDATER_SCRIPT" >/dev/null <<EOF
+  {
+    cat <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-curl -fsSL "https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/scripts/linux/install-latest.sh" | bash -s --${persisted_args_str}
+declare -a updater_args=(
 EOF
+    for arg in "${persisted_args[@]}"; do
+      printf '  %q\n' "$arg"
+    done
+    cat <<EOF
+)
+cfg_path="/etc/constitute-gateway/config.json"
+if command -v python3 >/dev/null 2>&1 && [[ -f "\$cfg_path" ]]; then
+  release_track="\$(python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path('/etc/constitute-gateway/config.json')
+try:
+    cfg = json.loads(path.read_text(encoding='utf-8'))
+except Exception:
+    print('')
+    raise SystemExit(0)
+print(str(cfg.get('release_track', '')).strip())
+PY
+)"
+  case "\$release_track" in
+    local|dev-local)
+      echo "constitute-gateway updater: release_track=\$release_track, skipping release fetch on local/dev host."
+      exit 0
+      ;;
+  esac
+fi
+tmp_script="\$(mktemp)"
+trap 'rm -f "\$tmp_script"' EXIT
+curl -fsSL ${raw_script_url@Q} -o "\$tmp_script"
+bash "\$tmp_script" "\${updater_args[@]}"
+EOF
+  } | run_sudo tee "$UPDATER_SCRIPT" >/dev/null
   run_sudo chmod 0755 "$UPDATER_SCRIPT"
 
   run_sudo tee "/etc/systemd/system/${SERVICE_UNIT}" >/dev/null <<EOF
@@ -223,6 +255,10 @@ while [[ $# -gt 0 ]]; do
       REPO_NAME="${2:?missing value for --repo-name}"
       shift 2
       ;;
+    --repo-ref)
+      REPO_REF="${2:?missing value for --repo-ref}"
+      shift 2
+      ;;
     --setup-timer)
       SETUP_TIMER=1
       shift
@@ -285,6 +321,32 @@ require_cmd tar
 require_cmd bash
 build_curl_args
 verify_tor_proxy
+
+if [[ -f /etc/constitute-gateway/config.json ]] && command -v python3 >/dev/null 2>&1; then
+  current_track="$(python3 - <<'PY'
+import json
+from pathlib import Path
+path = Path('/etc/constitute-gateway/config.json')
+try:
+    cfg = json.loads(path.read_text(encoding='utf-8'))
+except Exception:
+    print('')
+    raise SystemExit(0)
+print(str(cfg.get('release_track', '')).strip())
+PY
+)"
+  case "$current_track" in
+    local|dev-local)
+      echo "constitute-gateway install-latest: release_track=$current_track; skipping release artifact install on local/dev host."
+      if [[ "$SETUP_TIMER" -eq 1 ]]; then
+        require_cmd systemctl
+        setup_update_timer
+        echo "Auto-update timer configured: ${TIMER_UNIT} (local/dev hosts no-op instead of pulling releases)"
+      fi
+      exit 0
+      ;;
+  esac
+fi
 
 BASE="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/latest/download"
 LINUX_ASSET="constitute-gateway-linux-amd64.tar.gz"
