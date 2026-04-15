@@ -1,6 +1,8 @@
 mod discovery;
+mod grants;
 mod keystore;
 mod local_relay;
+mod managed;
 mod nostr;
 mod platform;
 mod relay;
@@ -9,13 +11,15 @@ mod transport;
 mod util;
 
 use crate::swarm_store::{RecordType, SwarmStoreMap};
-use anyhow::{anyhow, Result};
+use anyhow::{Context, Result, anyhow};
 use clap::{ArgAction, Parser};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
+use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::Command;
@@ -306,6 +310,135 @@ struct GatewayZoneSyncStatusPayload {
     detail: Option<String>,
     ts: u64,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewayManagedLaunchRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(rename = "devicePk", default)]
+    device_pk: String,
+    #[serde(rename = "servicePk", default)]
+    service_pk: String,
+    #[serde(default)]
+    service: String,
+    #[serde(default)]
+    capability: String,
+    #[serde(rename = "launchNonce", default)]
+    launch_nonce: String,
+    #[serde(default)]
+    zone: String,
+    #[serde(rename = "appRepo", default)]
+    app_repo: String,
+    #[serde(default)]
+    display: Value,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewayManagedLaunchStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    capability: String,
+    #[serde(rename = "launchToken", skip_serializing_if = "Option::is_none")]
+    launch_token: Option<String>,
+    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
+    expires_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    display: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GatewaySignalRequest {
+    #[serde(rename = "requestId", default)]
+    request_id: String,
+    #[serde(rename = "toDevicePk", default)]
+    to_device_pk: String,
+    #[serde(rename = "identityId", default)]
+    identity_id: String,
+    #[serde(rename = "devicePk", default)]
+    device_pk: String,
+    #[serde(rename = "servicePk", default)]
+    service_pk: String,
+    #[serde(default)]
+    service: String,
+    #[serde(rename = "signalType", default)]
+    signal_type: String,
+    #[serde(default)]
+    payload: Value,
+    #[serde(rename = "launchToken", default)]
+    launch_token: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewaySignalStatusPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    status: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    #[serde(rename = "signalType")]
+    signal_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    ts: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct GatewaySignalPayload {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(rename = "requestId")]
+    request_id: String,
+    #[serde(rename = "gatewayPk")]
+    gateway_pk: String,
+    #[serde(rename = "identityId")]
+    identity_id: String,
+    #[serde(rename = "devicePk")]
+    device_pk: String,
+    #[serde(rename = "servicePk")]
+    service_pk: String,
+    service: String,
+    #[serde(rename = "signalType")]
+    signal_type: String,
+    payload: Value,
+    ts: u64,
+}
+
 
 #[derive(Debug, Clone, Deserialize)]
 struct PairApprovePayload {
@@ -714,32 +847,33 @@ async fn main() -> Result<()> {
         cfg.release_branch.trim(),
     );
 
+    let http_client = HttpClient::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .unwrap_or_else(|_| HttpClient::new());
+    let hosted_services_initial =
+        managed::load_hosted_services_snapshot(&http_client, &cfg.nostr_pubkey).await;
     let (swarm_tx, swarm_rx) = watch::channel(cfg.swarm_endpoint.clone());
     let (metrics_tx, metrics_rx) = watch::channel(discovery::GatewayMetrics::default());
+    let (hosted_services_tx, hosted_services_rx) = watch::channel(hosted_services_initial.clone());
     let relay_req = discovery::relay_req_json();
     let (inbound_tx, mut inbound_rx) = mpsc::unbounded_channel::<String>();
     let (local_in_tx, mut local_in_rx) = mpsc::unbounded_channel::<Value>();
     let store = Arc::new(Mutex::new(SwarmStoreMap::new()));
     let (udp_in_tx, mut udp_in_rx) = mpsc::unbounded_channel::<transport::UdpInbound>();
-    if !cfg.nostr_pubkey.is_empty() && !cfg.nostr_sk_hex.is_empty() {
-        if let Ok(ev) =
-            build_device_record_event(&cfg.nostr_pubkey, &cfg.nostr_sk_hex, &device_record)
-        {
-            let _ = store.lock().await.put_record_all(&zones, &ev);
-        }
-    }
     // === Network services: relay, discovery publisher, UDP transport ===
     let relay_pool =
         relay::RelayPool::new(cfg.nostr_relays.clone(), relay_req, Some(inbound_tx)).await;
     let discovery_client = discovery::DiscoveryClient::new(
         relay_pool.clone(),
-        device_record,
+        device_record.clone(),
         cfg.nostr_pubkey.clone(),
         cfg.nostr_sk_hex.clone(),
         Duration::from_secs(cfg.nostr_publish_interval_secs),
         zones.clone(),
         swarm_rx,
         metrics_rx,
+        hosted_services_rx,
     );
     tokio::spawn(async move {
         if let Err(err) = discovery_client.run().await {
@@ -984,6 +1118,8 @@ async fn main() -> Result<()> {
         }
     });
 
+    let grant_state = Arc::new(Mutex::new(grants::load_grant_state(&cfg.data_dir)));
+
     // === Inbound processing context shared by nostr/local relay/UDP paths ===
     let inbound_ctx = InboundContext {
         self_pk: cfg.nostr_pubkey.clone(),
@@ -1007,13 +1143,50 @@ async fn main() -> Result<()> {
         seen_max: 4096,
         remote_service_install_enabled: cfg.remote_service_install_enabled,
         remote_service_install_timeout_secs: cfg.remote_service_install_timeout_secs.max(60),
+        http_client: http_client.clone(),
+        stun_servers: cfg.stun_servers.clone(),
+        turn_servers: cfg.turn_servers.clone(),
         authorized_control_device_pks: cfg
             .authorized_control_device_pks
             .iter()
             .map(|v| v.trim().to_string())
             .filter(|v| !v.is_empty())
             .collect(),
+        grant_state: grant_state.clone(),
     };
+
+    let hosted_services_gateway_pk = cfg.nostr_pubkey.clone();
+    let hosted_services_client = http_client.clone();
+    let hosted_services_store = store.clone();
+    let hosted_services_relay_pool = relay_pool.clone();
+    let hosted_services_local_relay = local_relay.clone();
+    let hosted_services_zones = zones.clone();
+    let hosted_services_device_record = device_record.clone();
+    let hosted_services_self_pk = cfg.nostr_pubkey.clone();
+    let hosted_services_self_sk = cfg.nostr_sk_hex.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            let snapshot =
+                managed::load_hosted_services_snapshot(&hosted_services_client, &hosted_services_gateway_pk)
+                    .await;
+            if hosted_services_tx.send(snapshot.clone()).is_err() {
+                break;
+            }
+            publish_current_device_record(
+                &hosted_services_self_pk,
+                &hosted_services_self_sk,
+                &hosted_services_device_record,
+                &snapshot,
+                &hosted_services_zones,
+                &hosted_services_store,
+                &hosted_services_relay_pool,
+                &hosted_services_local_relay,
+            )
+            .await;
+        }
+    });
 
     let ctx_nostr = inbound_ctx.clone();
     tokio::spawn(async move {
@@ -1400,76 +1573,6 @@ fn normalize_gateway_zone_sync_request(req: &mut GatewayZoneSyncRequest) {
     req.extra_zone_keys = dedup_valid_zone_keys(&req.extra_zone_keys, 64);
 }
 
-async fn publish_gateway_service_install_status(
-    relay_pool: &relay::RelayPool,
-    local_relay: &Option<local_relay::LocalRelayHandle>,
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &GatewayServiceInstallStatusPayload,
-) -> Result<()> {
-    if pubkey.is_empty() || sk_hex.is_empty() {
-        return Ok(());
-    }
-    let value = serde_json::to_value(payload)?;
-    let ev = build_app_event(pubkey, sk_hex, &value)?;
-    relay_pool.broadcast(&nostr::frame_event(&ev));
-    if let Some(local) = local_relay.as_ref() {
-        if let Ok(val) = serde_json::to_value(ev) {
-            local.publish_event(val).await;
-        }
-    }
-    Ok(())
-}
-
-async fn publish_gateway_zone_sync_status(
-    relay_pool: &relay::RelayPool,
-    local_relay: &Option<local_relay::LocalRelayHandle>,
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &GatewayZoneSyncStatusPayload,
-) -> Result<()> {
-    if pubkey.is_empty() || sk_hex.is_empty() {
-        return Ok(());
-    }
-    let value = serde_json::to_value(payload)?;
-    let ev = build_app_event(pubkey, sk_hex, &value)?;
-    relay_pool.broadcast(&nostr::frame_event(&ev));
-    if let Some(local) = local_relay.as_ref() {
-        if let Ok(val) = serde_json::to_value(ev) {
-            local.publish_event(val).await;
-        }
-    }
-    Ok(())
-}
-
-async fn is_requester_authorized_for_service_install(
-    ctx: &InboundContext,
-    requester_pk: &str,
-    identity_id: &str,
-) -> bool {
-    let requester = requester_pk.trim();
-    let identity = identity_id.trim();
-    if requester.is_empty() || identity.is_empty() {
-        return false;
-    }
-
-    if !ctx.authorized_control_device_pks.is_empty()
-        && !ctx.authorized_control_device_pks.contains(requester)
-    {
-        return false;
-    }
-
-    let guard = ctx.store.lock().await;
-    let rec = match guard.get_device_event_any(requester) {
-        Some(rec) => rec,
-        None => return false,
-    };
-    match record_identity_id(&rec) {
-        Some(id) => id.trim() == identity,
-        None => false,
-    }
-}
-
 #[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
 fn summarize_output(mut stdout: Vec<u8>, stderr: Vec<u8>) -> String {
     if stdout.is_empty() && stderr.is_empty() {
@@ -1587,7 +1690,7 @@ fn execute_nvr_install_request(
         c.arg("bash");
         c
     } else {
-        let mut c = Command::new("bash");
+        let c = Command::new("bash");
         c
     };
 
@@ -2050,547 +2153,105 @@ fn build_gateway_zone_sync_status_payload(
     }
 }
 
-async fn handle_gateway_service_install_request(
-    ctx: &InboundContext,
-    nostr_ev: &nostr::NostrEvent,
-    payload: &Value,
-) {
-    let mut req: GatewayServiceInstallRequest = match serde_json::from_value(payload.clone()) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "invalid gateway_service_install_request payload");
-            return;
-        }
-    };
-    normalize_gateway_service_install_request(&mut req);
-
-    if req.to_device_pk != ctx.self_pk {
-        return;
+fn build_gateway_managed_launch_status_payload(
+    req: &GatewayManagedLaunchRequest,
+    gateway_pk: &str,
+    status: &str,
+    launch_token: Option<String>,
+    expires_at: Option<u64>,
+    display: Option<Value>,
+    reason: Option<String>,
+    detail: Option<String>,
+) -> GatewayManagedLaunchStatusPayload {
+    GatewayManagedLaunchStatusPayload {
+        kind: "gateway_managed_launch_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        capability: req.capability.clone(),
+        launch_token,
+        expires_at,
+        display,
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
     }
-
-    let zone = if req.zone.is_empty() {
-        payload_zone(payload)
-    } else {
-        Some(req.zone.clone())
-    };
-
-    let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
-        build_gateway_service_install_status_payload(
-            &req,
-            &ctx.self_pk,
-            status,
-            reason,
-            detail,
-            zone.clone(),
-        )
-    };
-
-    if !ctx.remote_service_install_enabled {
-        let status = publish_status(
-            "rejected",
-            Some("remote_install_disabled".to_string()),
-            Some("gateway remote service install is disabled".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.service != "nvr" || req.action != "install" {
-        let status = publish_status(
-            "rejected",
-            Some("unsupported_action".to_string()),
-            Some("only nvr install is supported".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let gateway_identity = ctx.gateway_identity_id.trim();
-    if gateway_identity.is_empty() {
-        let status = publish_status(
-            "rejected",
-            Some("gateway_identity_missing".to_string()),
-            Some("gateway identity is not configured".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.identity_id.trim() != gateway_identity {
-        let status = publish_status(
-            "rejected",
-            Some("identity_mismatch".to_string()),
-            Some("request identity does not match gateway identity".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.pair_identity.is_empty() || req.pair_code.is_empty() || req.pair_code_hash.is_empty() {
-        let status = publish_status(
-            "rejected",
-            Some("missing_pairing_material".to_string()),
-            Some("pairIdentity/pairCode/pairCodeHash are required".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let requester_pk = nostr_ev.pubkey.clone();
-    if !is_requester_authorized_for_service_install(ctx, &requester_pk, &req.identity_id).await {
-        let status = publish_status(
-            "rejected",
-            Some("unauthorized_requester".to_string()),
-            Some("requester is not authorized for this identity".to_string()),
-        );
-        let _ = publish_gateway_service_install_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.zone_keys.is_empty() {
-        if let Some(z) = zone.clone() {
-            req.zone_keys.push(z);
-        } else {
-            req.zone_keys = ctx.zones.clone();
-        }
-    }
-    if req.swarm_peers.is_empty() {
-        req.swarm_peers.push("127.0.0.1:4040".to_string());
-    }
-    if req.public_ws_url.is_empty() {
-        req.public_ws_url = "ws://127.0.0.1:8456/session".to_string();
-    }
-    if !req.authorized_device_pks.contains(&requester_pk) {
-        req.authorized_device_pks.push(requester_pk.clone());
-    }
-
-    let timeout_secs = req
-        .timeout_secs
-        .unwrap_or(ctx.remote_service_install_timeout_secs)
-        .max(60)
-        .min(7200);
-
-    let accepted = build_gateway_service_install_status_payload(
-        &req,
-        &ctx.self_pk,
-        "accepted",
-        None,
-        None,
-        zone.clone(),
-    );
-    let _ = publish_gateway_service_install_status(
-        &ctx.relay_pool,
-        &ctx.local_relay,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        &accepted,
-    )
-    .await;
-
-    let relay_pool = ctx.relay_pool.clone();
-    let local_relay = ctx.local_relay.clone();
-    let self_pk = ctx.self_pk.clone();
-    let self_sk = ctx.self_sk.clone();
-    let zone_copy = zone.clone();
-    let req_for_task = req.clone();
-
-    tokio::spawn(async move {
-        let started = build_gateway_service_install_status_payload(
-            &req_for_task,
-            &self_pk,
-            "started",
-            None,
-            None,
-            zone_copy.clone(),
-        );
-        let _ = publish_gateway_service_install_status(
-            &relay_pool,
-            &local_relay,
-            &self_pk,
-            &self_sk,
-            &started,
-        )
-        .await;
-
-        let run_req = req_for_task.clone();
-        let result = tokio::task::spawn_blocking(move || {
-            execute_nvr_install_request(&run_req, timeout_secs)
-        })
-        .await;
-
-        match result {
-            Ok(Ok(detail)) => {
-                let status = build_gateway_service_install_status_payload(
-                    &req_for_task,
-                    &self_pk,
-                    "complete",
-                    None,
-                    if detail.is_empty() {
-                        None
-                    } else {
-                        Some(detail)
-                    },
-                    zone_copy.clone(),
-                );
-                let _ = publish_gateway_service_install_status(
-                    &relay_pool,
-                    &local_relay,
-                    &self_pk,
-                    &self_sk,
-                    &status,
-                )
-                .await;
-            }
-            Ok(Err(err)) => {
-                let status = build_gateway_service_install_status_payload(
-                    &req_for_task,
-                    &self_pk,
-                    "failed",
-                    Some("install_failed".to_string()),
-                    Some(err.to_string()),
-                    zone_copy.clone(),
-                );
-                let _ = publish_gateway_service_install_status(
-                    &relay_pool,
-                    &local_relay,
-                    &self_pk,
-                    &self_sk,
-                    &status,
-                )
-                .await;
-            }
-            Err(err) => {
-                let status = build_gateway_service_install_status_payload(
-                    &req_for_task,
-                    &self_pk,
-                    "failed",
-                    Some("install_task_join_failed".to_string()),
-                    Some(err.to_string()),
-                    zone_copy.clone(),
-                );
-                let _ = publish_gateway_service_install_status(
-                    &relay_pool,
-                    &local_relay,
-                    &self_pk,
-                    &self_sk,
-                    &status,
-                )
-                .await;
-            }
-        }
-    });
 }
 
-async fn handle_gateway_zone_sync_request(
-    ctx: &InboundContext,
-    nostr_ev: &nostr::NostrEvent,
-    payload: &Value,
-) {
-    let mut req: GatewayZoneSyncRequest = match serde_json::from_value(payload.clone()) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "invalid gateway_zone_sync_request payload");
-            return;
-        }
-    };
-    normalize_gateway_zone_sync_request(&mut req);
-
-    if req.to_device_pk != ctx.self_pk {
-        return;
+fn build_gateway_signal_status_payload(
+    req: &GatewaySignalRequest,
+    gateway_pk: &str,
+    status: &str,
+    reason: Option<String>,
+    detail: Option<String>,
+) -> GatewaySignalStatusPayload {
+    GatewaySignalStatusPayload {
+        kind: "gateway_signal_status".to_string(),
+        request_id: req.request_id.clone(),
+        status: status.to_string(),
+        to_device_pk: req.device_pk.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        signal_type: req.signal_type.clone(),
+        reason,
+        detail,
+        ts: util::now_unix_seconds() * 1000,
     }
+}
 
-    let zone = if req.zone.is_empty() {
-        payload_zone(payload)
-    } else {
-        Some(req.zone.clone())
-    };
-
-    let publish_status = |status: &str,
-                          reason: Option<String>,
-                          detail: Option<String>,
-                          restart_required: bool,
-                          zone_keys: Vec<String>,
-                          extra_zone_keys: Vec<String>| {
-        build_gateway_zone_sync_status_payload(
-            &req,
-            &ctx.self_pk,
-            status,
-            reason,
-            detail,
-            zone.clone(),
-            restart_required,
-            zone_keys,
-            extra_zone_keys,
-        )
-    };
-
-    if !ctx.remote_service_install_enabled {
-        let status = publish_status(
-            "rejected",
-            Some("remote_install_disabled".to_string()),
-            Some("gateway remote control is disabled".to_string()),
-            false,
-            req.zone_keys.clone(),
-            req.extra_zone_keys.clone(),
-        );
-        let _ = publish_gateway_zone_sync_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
+fn build_gateway_signal_payload(
+    req: &GatewaySignalRequest,
+    gateway_pk: &str,
+    payload: Value,
+) -> GatewaySignalPayload {
+    GatewaySignalPayload {
+        kind: "gateway_signal".to_string(),
+        request_id: req.request_id.clone(),
+        gateway_pk: gateway_pk.to_string(),
+        identity_id: req.identity_id.clone(),
+        device_pk: req.device_pk.clone(),
+        service_pk: req.service_pk.clone(),
+        service: req.service.clone(),
+        signal_type: req.signal_type.clone(),
+        payload,
+        ts: util::now_unix_seconds() * 1000,
     }
+}
 
-    let gateway_identity = ctx.gateway_identity_id.trim();
-    if gateway_identity.is_empty() {
-        let status = publish_status(
-            "rejected",
-            Some("gateway_identity_missing".to_string()),
-            Some("gateway identity is not configured".to_string()),
-            false,
-            req.zone_keys.clone(),
-            req.extra_zone_keys.clone(),
-        );
-        let _ = publish_gateway_zone_sync_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
+fn service_sources_from_health(health: &Value) -> Vec<String> {
+    health
+        .get("sources")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|entry| entry.as_str().map(|v| v.trim().to_string()))
+                .filter(|entry| !entry.is_empty())
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
-    if req.identity_id.trim() != gateway_identity {
-        let status = publish_status(
-            "rejected",
-            Some("identity_mismatch".to_string()),
-            Some("request identity does not match gateway identity".to_string()),
-            false,
-            req.zone_keys.clone(),
-            req.extra_zone_keys.clone(),
-        );
-        let _ = publish_gateway_zone_sync_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let requester_pk = nostr_ev.pubkey.clone();
-    if !is_requester_authorized_for_service_install(ctx, &requester_pk, &req.identity_id).await {
-        let status = publish_status(
-            "rejected",
-            Some("unauthorized_requester".to_string()),
-            Some("requester is not authorized for this identity".to_string()),
-            false,
-            req.zone_keys.clone(),
-            req.extra_zone_keys.clone(),
-        );
-        let _ = publish_gateway_zone_sync_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let mut identity_zone_keys = req.zone_keys.clone();
-    if identity_zone_keys.is_empty() {
-        if let Some(z) = zone.clone() {
-            if util::is_valid_zone_key(&z) {
-                identity_zone_keys.push(z);
-            }
-        }
-    }
-
-    let mut effective_zone_keys = identity_zone_keys.clone();
-    for z in &req.extra_zone_keys {
-        if !effective_zone_keys.contains(z) {
-            effective_zone_keys.push(z.clone());
-        }
-    }
-    effective_zone_keys = dedup_valid_zone_keys(&effective_zone_keys, 64);
-
-    if effective_zone_keys.is_empty() {
-        let status = publish_status(
-            "rejected",
-            Some("missing_zones".to_string()),
-            Some("at least one valid zone key is required".to_string()),
-            false,
-            identity_zone_keys.clone(),
-            req.extra_zone_keys.clone(),
-        );
-        let _ = publish_gateway_zone_sync_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let seed = keystore::SecureSeed {
-        nostr_pubkey: ctx.self_pk.clone(),
-        nostr_sk_hex: ctx.self_sk.clone(),
-        identity_id: ctx.gateway_identity_id.clone(),
-        device_label: String::new(),
-        zones: Vec::new(),
-    };
-
-    let (secure, _) = match keystore::load_or_init(&ctx.data_dir, seed) {
-        Ok(v) => v,
-        Err(err) => {
-            let status = publish_status(
-                "failed",
-                Some("keystore_error".to_string()),
-                Some(err.to_string()),
-                false,
-                identity_zone_keys.clone(),
-                req.extra_zone_keys.clone(),
-            );
-            let _ = publish_gateway_zone_sync_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-
-    let mut names: HashMap<String, String> = HashMap::new();
-    for z in secure.zones {
-        let key = z.key.trim().to_string();
-        if key.is_empty() {
-            continue;
-        }
-        let name = z.name.trim().to_string();
-        if !names.contains_key(&key) {
-            names.insert(
-                key,
-                if name.is_empty() {
-                    "Joined".to_string()
-                } else {
-                    name
-                },
-            );
-        }
-    }
-
-    let zone_entries: Vec<keystore::ZoneEntry> = effective_zone_keys
+fn service_sources_from_config(cameras: &[Value]) -> Vec<String> {
+    cameras
         .iter()
-        .map(|key| keystore::ZoneEntry {
-            key: key.clone(),
-            name: names
-                .get(key)
-                .cloned()
-                .unwrap_or_else(|| "Joined".to_string()),
+        .filter_map(|entry| {
+            entry.get("source_id")
+                .and_then(|v| v.as_str())
+                .or_else(|| entry.get("sourceId").and_then(|v| v.as_str()))
+                .map(|v| v.trim().to_string())
         })
-        .collect();
-
-    match keystore::update_zones(&ctx.data_dir, zone_entries) {
-        Ok(()) => {
-            let detail = format!(
-                "stored {} zones ({} identity + {} extra); restart gateway service to apply runtime transport scope",
-                effective_zone_keys.len(),
-                identity_zone_keys.len(),
-                req.extra_zone_keys.len()
-            );
-            let status = publish_status(
-                "complete",
-                None,
-                Some(detail),
-                true,
-                effective_zone_keys,
-                req.extra_zone_keys.clone(),
-            );
-            let _ = publish_gateway_zone_sync_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-        }
-        Err(err) => {
-            let status = publish_status(
-                "failed",
-                Some("zone_persist_failed".to_string()),
-                Some(err.to_string()),
-                false,
-                req.zone_keys.clone(),
-                req.extra_zone_keys.clone(),
-            );
-            let _ = publish_gateway_zone_sync_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-        }
-    }
+        .filter(|entry| !entry.is_empty())
+        .collect()
 }
+
 
 fn build_device_record_event(
     pubkey: &str,
@@ -2610,6 +2271,39 @@ fn build_device_record_event(
         util::now_unix_seconds(),
     );
     nostr::sign_event(&unsigned, sk_hex)
+}
+
+async fn publish_current_device_record(
+    pubkey: &str,
+    sk_hex: &str,
+    base_record: &discovery::SwarmDeviceRecord,
+    hosted_services: &[discovery::HostedServiceRecord],
+    zones: &[String],
+    store: &Arc<Mutex<SwarmStoreMap>>,
+    relay_pool: &relay::RelayPool,
+    local_relay: &Option<local_relay::LocalRelayHandle>,
+) {
+    if pubkey.trim().is_empty() || sk_hex.trim().is_empty() {
+        return;
+    }
+    let mut record = base_record.clone();
+    let now_ms = util::now_unix_seconds() * 1000;
+    record.updated_at = now_ms;
+    record.expires_at = now_ms + (24 * 60 * 60 * 1000);
+    record.hosted_services = hosted_services.to_vec();
+    let Ok(record_ev) = build_device_record_event(pubkey, sk_hex, &record) else {
+        return;
+    };
+    {
+        let mut guard = store.lock().await;
+        let _ = guard.put_record_all(zones, &record_ev);
+    }
+    relay_pool.broadcast(&nostr::frame_event(&record_ev));
+    if let Some(local) = local_relay.as_ref() {
+        if let Ok(val) = serde_json::to_value(&record_ev) {
+            local.publish_event(val).await;
+        }
+    }
 }
 
 fn build_dht_record_event(
@@ -2784,6 +2478,13 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
             | "gateway_service_install_status"
             | "gateway_zone_sync_request"
             | "gateway_zone_sync_status"
+            | "gateway_managed_launch_request"
+            | "gateway_managed_launch_status"
+            | "gateway_grant_request"
+            | "gateway_grant_status"
+            | "gateway_signal_request"
+            | "gateway_signal_status"
+            | "gateway_signal"
     )
 }
 
@@ -2889,7 +2590,11 @@ struct InboundContext {
     seen_max: usize,
     remote_service_install_enabled: bool,
     remote_service_install_timeout_secs: u64,
+    http_client: HttpClient,
+    stun_servers: Vec<String>,
+    turn_servers: Vec<String>,
     authorized_control_device_pks: HashSet<String>,
+    grant_state: Arc<Mutex<grants::GrantState>>,
 }
 
 #[derive(Clone, Copy)]
@@ -3297,12 +3002,27 @@ async fn process_inbound_event(
         }
 
         if kind == "gateway_service_install_request" {
-            handle_gateway_service_install_request(&ctx, &nostr_ev, &payload).await;
+            managed::handle_gateway_service_install_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
         if kind == "gateway_zone_sync_request" {
-            handle_gateway_zone_sync_request(&ctx, &nostr_ev, &payload).await;
+            managed::handle_gateway_zone_sync_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_managed_launch_request" {
+            managed::handle_gateway_managed_launch_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_grant_request" {
+            grants::handle_gateway_grant_request(&ctx, &nostr_ev, &payload).await;
+            return;
+        }
+
+        if kind == "gateway_signal_request" {
+            managed::handle_gateway_signal_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
@@ -4174,6 +3894,26 @@ mod tests {
         assert_eq!(fallback, vec!["zone-a".to_string()]);
     }
 
+    #[test]
+    fn gateway_offer_candidates_reads_nested_browser_offer_candidates() {
+        let payload = json!({
+            "description": {
+                "type": "offer",
+                "sdp": "v=0\r\n",
+            },
+            "candidates": [
+                {
+                    "candidate": "candidate:1 1 udp 2122260223 10.0.229.73 54547 typ host",
+                    "sdpMid": "0",
+                    "sdpMLineIndex": 0,
+                }
+            ],
+        });
+
+        let candidates = managed::gateway_offer_candidates(&payload);
+        assert_eq!(candidates.as_array().map(|items| items.len()), Some(1));
+    }
+
     #[tokio::test]
     async fn web_bridge_swarm_discovery_request() {
         let (pk, sk) = nostr::generate_keypair();
@@ -4281,7 +4021,11 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
+            grant_state: Arc::new(Mutex::new(grants::GrantState::default())),
         };
 
         // connect a client to observe app events
@@ -4466,7 +4210,11 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
+            grant_state: Arc::new(Mutex::new(grants::GrantState::default())),
         };
 
         let url = format!("ws://{}", bind);
@@ -4608,7 +4356,11 @@ mod tests {
             pair_code_hash: String::new(),
             remote_service_install_enabled: false,
             remote_service_install_timeout_secs: 300,
+            http_client: HttpClient::new(),
+            stun_servers: Vec::new(),
+            turn_servers: Vec::new(),
             authorized_control_device_pks: HashSet::new(),
+            grant_state: Arc::new(Mutex::new(grants::GrantState::default())),
         };
 
         let url = format!("ws://{}", bind);

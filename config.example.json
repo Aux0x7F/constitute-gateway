@@ -3,11 +3,11 @@
   "bind": "0.0.0.0:4040",
   "data_dir": "./data",
   "nostr_relays": [
-    "wss://relay.snort.social"
+    "wss://nos.lol",
+    "wss://relay.primal.net",
+    "wss://nostr.mom"
   ],
-  "advertise_relays": [
-    "ws://gateway.example:7447"
-  ],
+  "advertise_relays": [],
   "nostr_kind": 30078,
   "nostr_tag": "swarm_discovery",
   "nostr_publish_interval_secs": 30,

@@ -1,6 +1,6 @@
 [package]
 name = "constitute-gateway"
-version = "0.1.0"
+version = "0.1.3"
 edition = "2021"
 
 [features]
@@ -38,6 +38,7 @@ quinn = { version = "0.11", default-features = false, features = ["runtime-tokio
 rcgen = "0.13"
 rustls = { version = "0.23", features = ["ring"] }
 eframe = { version = "0.29", optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "net", "sync"] }

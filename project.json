@@ -1,0 +1,23 @@
+{
+  "$schema": "../node_modules/nx/schemas/project-schema.json",
+  "name": "constitute-gateway",
+  "projectType": "application",
+  "root": "constitute-gateway",
+  "sourceRoot": "constitute-gateway/src",
+  "targets": {
+    "build": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "constitute-gateway",
+        "command": "cargo build"
+      }
+    },
+    "test": {
+      "executor": "nx:run-commands",
+      "options": {
+        "cwd": "constitute-gateway",
+        "command": "cargo test --quiet"
+      }
+    }
+  }
+}
