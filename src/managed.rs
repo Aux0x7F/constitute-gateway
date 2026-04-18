@@ -1882,8 +1882,8 @@ pub(super) async fn handle_gateway_signal_request(
     let request_timeout = match req.signal_type.as_str() {
         // PTZ control can legitimately take longer now that Reolink control may degrade through
         // an observed-step fulfillment loop instead of returning after a single blind pulse.
-        "control" => Duration::from_secs(30),
-        "admin" => Duration::from_secs(20),
+        "control" => Duration::from_secs(45),
+        "admin" => Duration::from_secs(120),
         _ => Duration::from_secs(5),
     };
     let response = ctx
