@@ -20,7 +20,7 @@ struct HostedNvrManifest {
     #[serde(default)]
     health_url: String,
     #[serde(default)]
-    cameras: Vec<Value>,
+    camera_devices: Vec<Value>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -32,7 +32,7 @@ pub(super) struct HostedNvrConfig {
     #[serde(default)]
     device_label: String,
     #[serde(default)]
-    cameras: Vec<Value>,
+    camera_devices: Vec<Value>,
     #[serde(default)]
     api: HostedNvrApiConfig,
     #[serde(default)]
@@ -199,7 +199,7 @@ async fn load_hosted_nvr_service_from_manifest(
         service_version: manifest.service_version.trim().to_string(),
         nostr_pubkey: service_pk.clone(),
         device_label: manifest.device_label.trim().to_string(),
-        cameras: manifest.cameras.clone(),
+        camera_devices: manifest.camera_devices.clone(),
         api: HostedNvrApiConfig {
             bind: manifest.api_bind.trim().to_string(),
         },
@@ -211,7 +211,7 @@ async fn load_hosted_nvr_service_from_manifest(
 
     let now = util::now_unix_seconds() * 1000;
     let mut status = "configured".to_string();
-    let mut camera_count = fallback_cfg.cameras.len() as u64;
+    let mut camera_count = fallback_cfg.camera_devices.len() as u64;
     if let Ok(resp) = client
         .get(&health_url)
         .timeout(Duration::from_secs(3))
@@ -341,7 +341,7 @@ async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Optio
 
         let now = util::now_unix_seconds() * 1000;
         let mut status = "configured".to_string();
-        let mut camera_count = cfg.cameras.len() as u64;
+        let mut camera_count = cfg.camera_devices.len() as u64;
         if let Ok(resp) = client
             .get(format!("{api_base_url}/health"))
             .timeout(Duration::from_secs(3))
@@ -644,7 +644,7 @@ fn build_managed_service_display(
     let fallback_sources = {
         let live = service_sources_from_health(&hosted.health);
         if live.is_empty() {
-            service_sources_from_config(&hosted.config.cameras)
+            service_sources_from_config(&hosted.config.camera_devices)
         } else {
             live
         }
@@ -707,7 +707,11 @@ pub(super) fn camera_resources_from_hosted(hosted: &HostedNvrService) -> Vec<gra
     let mut resources = Vec::new();
     let mut seen = HashSet::new();
 
-    if let Some(cameras) = hosted.health.get("cameras").and_then(|value| value.as_array()) {
+    if let Some(cameras) = hosted
+        .health
+        .get("cameraDevices")
+        .and_then(|value| value.as_array())
+    {
         for camera in cameras {
             let source_id = camera
                 .get("sourceId")
@@ -738,7 +742,7 @@ pub(super) fn camera_resources_from_hosted(hosted: &HostedNvrService) -> Vec<gra
         }
     }
 
-    for camera in &hosted.config.cameras {
+    for camera in &hosted.config.camera_devices {
         let source_id = camera
             .get("sourceId")
             .or_else(|| camera.get("source_id"))
