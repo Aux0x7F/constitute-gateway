@@ -7,8 +7,8 @@ This document is the install and update reference for `constitute-gateway`.
 - Linux: `constitute-operator-linux-amd64.tar.gz`
 
 ## Web-Driven Install
-1. In `constitute` web, open `Settings > Appliances`.
-2. Click `Download Installer Utility`.
+1. Open `constitute-gateway-ui`.
+2. Open the target gateway row and use the installer / operator action.
 3. Run the generated command from the operator host.
 
 The generated command passes `--pair-identity` so the installer can prepare pairing material when needed.
@@ -50,7 +50,7 @@ Pairing code generation occurs only when all conditions are true:
 - Gateway is not already paired (`identity_id` is empty).
 - Existing pairing material is missing or invalid for the target identity.
 
-On generation, the installer prints the one-time code. Claim it in `Settings > Pairing > Add Device`.
+On generation, the installer prints the one-time code. Claim it in `constitute-account` under pairing/device approval.
 After approval, the gateway persists the resolved `identity_id` into encrypted keystore state and performs one controlled restart so the paired runtime state is applied cleanly.
 
 ## Advanced CLI Options

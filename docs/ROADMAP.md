@@ -1,6 +1,6 @@
 # Project Roadmap Brief
 
-This brief captures execution order across `constitute-gateway`, `constitute`, `constitute-nvr`, and `constitute-nvr-ui`.
+This brief captures execution order across `constitute-gateway`, `constitute-account`, `constitute-gateway-ui`, `constitute-nvr`, and `constitute-nvr-ui`.
 
 ## Delivery Strategy
 1. Freeze cross-repo contracts for service-backed devices and managed app surfaces.
@@ -17,6 +17,7 @@ Rationale:
 - Gateway: discovery, app-channel bridge, zone-scoped UDP/DHT path, optional QUIC mesh path, and gateway zone-sync/install contracts implemented.
 - Managed-service launch/signaling: active implementation slice.
 - NVR: service install path exists; live preview and managed launch parity remain active work.
+- Browser/runtime split and direct app entry are current convergence work across `constitute-account`, `constitute-ui`, `constitute-gateway-ui`, and app surfaces.
 
 ## Phase Plan
 
@@ -28,7 +29,7 @@ Objectives:
 
 Exit criteria:
 - contract docs reviewed and stable across repos
-- compatibility defaults documented
+- default behavior documented without stale aliases
 - no unresolved schema ambiguity for launch/signaling records
 
 ### Phase B: Gateway Managed Launch and Signaling
@@ -58,18 +59,19 @@ Exit criteria:
 
 ### Phase D: Shell and App Surface Convergence
 Objectives:
-- make `constitute` a clean management shell plus launcher
+- retire launcher-first shell framing in favor of direct app entry plus `constitute-account`
 - make `constitute-nvr-ui` a clean Pages-hosted app surface
 - remove long-lived secret expectations from managed app launch
+- ensure direct app entry does not require a manual account visit before app use
 
 Exit criteria:
 - first-party app launch opens separate app surface cleanly
-- shell surfaces service-backed devices distinctly from user devices
+- account and gateway surfaces keep service-backed devices distinct from user devices
 - launch context/bootstrap works without query-string secrets
 
 ## Known Risks and Controls
 - Risk: contract drift during active iteration.
-  - Control: protocol-first changes and compatibility test vectors.
+  - Control: protocol-first changes and cross-repo test vectors.
 - Risk: WebRTC complexity slows delivery.
   - Control: keep gateway as signaling boundary and preserve recorded-media fallback.
 - Risk: shell/app bootstrap leaks secrets.
@@ -85,3 +87,31 @@ Exit criteria:
 - No repository-managed OS image/media generation path.
 - Dev: clone repository, build locally, install service locally.
 - Release: install/update service from tagged release artifacts.
+
+## Current / Planned Later Phases
+
+The product-surface split is current local convergence work. Host-capability services are planned later.
+
+### Phase E: Product-Surface Split
+Objectives:
+- keep `constitute-account` as the browser identity/session/grant authority
+- make direct app entry canonical instead of shell-launcher-first
+- keep gateway-specific management in `constitute-gateway-ui`
+
+Exit criteria:
+- account/profile/device/grant management has a clear primary app boundary
+- gateway-specific host/service management has a separate UI home
+- launcher behavior is convenience/navigation rather than the required primary flow
+
+### Phase F: Host-Capability Services
+Objectives:
+- introduce cryptographic media projection and warm NVR stream planning before burying stream lifecycle in gateway or recording
+- introduce `constitute-security` as a host-local capability service surfaced in UI as `Security`
+- introduce `constitute-storage` as a host-local capability service for encrypted content-addressed object/archive semantics
+- keep gateway as orchestrator/projector of those capabilities rather than making it their permanent implementation home
+
+Exit criteria:
+- gateway remains admission/signaling/orchestration boundary rather than routine media data path
+- workloads can request capability leases instead of embedding security/storage logic directly
+- hostile camera-network posture and higher-level anomaly reporting have an explicit home
+- durable object/blob/archive semantics have an explicit shared home without forcing all service config/runtime state into storage

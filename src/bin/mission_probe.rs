@@ -14,6 +14,7 @@ struct Cli {
     command: Command,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     RecoverSk {
@@ -76,7 +77,10 @@ async fn recover_sk(partial: &str, expected_pk: &str) -> Result<()> {
     let partial = hexish(partial);
     let expected_pk = expected_pk.trim().to_ascii_lowercase();
     if partial.len() != 63 {
-        return Err(anyhow!("expected a 63-hex partial secret, got {}", partial.len()));
+        return Err(anyhow!(
+            "expected a 63-hex partial secret, got {}",
+            partial.len()
+        ));
     }
     for nibble in "0123456789abcdef".chars() {
         let candidate = format!("{nibble}{partial}");
@@ -104,7 +108,7 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
             "limit": 200
         }
     ]))?;
-    socket.send(Message::Text(req_frame.into())).await?;
+    socket.send(Message::Text(req_frame)).await?;
 
     let request_id = format!("gw-launch-{}", random_suffix());
     let payload = json!({
@@ -137,7 +141,7 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
     );
     let event = nostr::sign_event(&unsigned, &args.sk)?;
     let event_frame = serde_json::to_string(&json!(["EVENT", event]))?;
-    socket.send(Message::Text(event_frame.into())).await?;
+    socket.send(Message::Text(event_frame)).await?;
 
     let timeout = tokio::time::sleep(std::time::Duration::from_secs(25));
     tokio::pin!(timeout);
@@ -209,7 +213,10 @@ struct RequestLaunchArgs {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::RecoverSk { partial, expected_pk } => recover_sk(&partial, &expected_pk).await,
+        Command::RecoverSk {
+            partial,
+            expected_pk,
+        } => recover_sk(&partial, &expected_pk).await,
         Command::RequestLaunch {
             relay,
             sk,

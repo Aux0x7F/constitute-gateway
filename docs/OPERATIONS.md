@@ -69,8 +69,7 @@ Baseline guidance:
 - Apply CPU quotas and restart policies for stability.
 
 ## Role Configuration
-- `node_role` is the primary runtime role config key (default: `gateway`).
-- Legacy `node_type` is accepted for backward compatibility.
+- `node_role` is the runtime role config key (default: `gateway`).
 - Role values are normalized to lowercase and must be ASCII `[a-z0-9_-]`.
 
 ## Mesh Transport Configuration

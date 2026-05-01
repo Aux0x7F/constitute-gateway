@@ -11,17 +11,18 @@ mod transport;
 mod util;
 
 use crate::swarm_store::{RecordType, SwarmStoreMap};
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use reqwest::Client as HttpClient;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs;
 use std::net::SocketAddr;
 use std::path::PathBuf;
+#[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
 use std::process::Command;
 #[cfg(all(feature = "platform-linux", not(feature = "platform-windows")))]
 use std::process::Stdio;
@@ -65,8 +66,6 @@ struct Config {
     node_id: String,
     #[serde(default = "default_node_role")]
     node_role: String,
-    #[serde(default)]
-    node_type: Option<String>,
     #[serde(default = "default_bind")]
     bind: String,
     #[serde(default = "default_data_dir")]
@@ -220,8 +219,8 @@ struct GatewayServiceInstallRequest {
     swarm_peers: Vec<String>,
     #[serde(rename = "publicWsUrl", default)]
     public_ws_url: String,
-    #[serde(rename = "allowUnsignedHelloMvp", default)]
-    allow_unsigned_hello_mvp: Option<bool>,
+    #[serde(rename = "allowUnsignedDebugHello", default)]
+    allow_unsigned_debug_hello: Option<bool>,
     #[serde(rename = "reolinkAutoprovision", default)]
     reolink_autoprovision: Option<bool>,
     #[serde(rename = "reolinkUsername", default)]
@@ -439,7 +438,6 @@ struct GatewaySignalPayload {
     ts: u64,
 }
 
-
 #[derive(Debug, Clone, Deserialize)]
 struct PairApprovePayload {
     #[serde(default)]
@@ -500,11 +498,6 @@ fn normalize_node_role(value: &str) -> Option<String> {
 fn resolve_node_role(cfg: &Config) -> String {
     if let Some(role) = normalize_node_role(&cfg.node_role) {
         return role;
-    }
-    if let Some(legacy) = cfg.node_type.as_deref() {
-        if let Some(role) = normalize_node_role(legacy) {
-            return role;
-        }
     }
     default_node_role()
 }
@@ -1023,7 +1016,7 @@ async fn main() -> Result<()> {
         peers: cfg.udp_peers.clone(),
         handshake_interval: Duration::from_secs(cfg.udp_handshake_interval_secs),
         peer_timeout: Duration::from_secs(cfg.udp_peer_timeout_secs),
-        max_packet_bytes: cfg.udp_max_packet_bytes.max(512).min(65507) as usize,
+        max_packet_bytes: cfg.udp_max_packet_bytes.clamp(512, 65507) as usize,
         rate_limit_per_sec: cfg.udp_rate_limit_per_sec,
         request_fanout: cfg.udp_request_fanout as usize,
         request_max_hops: cfg.udp_request_max_hops,
@@ -1048,7 +1041,7 @@ async fn main() -> Result<()> {
             peers: quic_peers,
             handshake_interval: Duration::from_secs(cfg.udp_handshake_interval_secs.max(1)),
             peer_timeout: Duration::from_secs(cfg.udp_peer_timeout_secs.max(10)),
-            max_packet_bytes: cfg.udp_max_packet_bytes.max(512).min(65507) as usize,
+            max_packet_bytes: cfg.udp_max_packet_bytes.clamp(512, 65507) as usize,
             rate_limit_per_sec: cfg.udp_rate_limit_per_sec,
             request_fanout: cfg.udp_request_fanout as usize,
             request_max_hops: cfg.udp_request_max_hops,
@@ -1168,9 +1161,11 @@ async fn main() -> Result<()> {
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
         loop {
             ticker.tick().await;
-            let snapshot =
-                managed::load_hosted_services_snapshot(&hosted_services_client, &hosted_services_gateway_pk)
-                    .await;
+            let snapshot = managed::load_hosted_services_snapshot(
+                &hosted_services_client,
+                &hosted_services_gateway_pk,
+            )
+            .await;
             if hosted_services_tx.send(snapshot.clone()).is_err() {
                 break;
             }
@@ -1439,7 +1434,7 @@ async fn main() -> Result<()> {
 
 fn has_tag(tags: &[Vec<String>], key: &str, value: &str) -> bool {
     tags.iter().any(|t| {
-        t.get(0).map(|v| v.as_str()) == Some(key) && t.get(1).map(|v| v.as_str()) == Some(value)
+        t.first().map(|v| v.as_str()) == Some(key) && t.get(1).map(|v| v.as_str()) == Some(value)
     })
 }
 
@@ -1480,7 +1475,7 @@ fn request_timeout(payload: &Value) -> Duration {
         .get("timeoutMs")
         .and_then(|v| v.as_u64())
         .unwrap_or(5000);
-    let capped = ms.max(500).min(30000);
+    let capped = ms.clamp(500, 30000);
     Duration::from_millis(capped)
 }
 
@@ -1622,8 +1617,8 @@ fn execute_nvr_install_request(
         req.pair_code_hash.clone(),
     ];
 
-    if req.allow_unsigned_hello_mvp.unwrap_or(true) {
-        args.push("--allow-unsigned-hello-mvp".to_string());
+    if req.allow_unsigned_debug_hello.unwrap_or(true) {
+        args.push("--allow-unsigned-debug-hello".to_string());
     } else {
         args.push("--require-signed-hello".to_string());
     }
@@ -1839,6 +1834,7 @@ async fn publish_record_app_event_with_request(
 }
 
 // Pending request state exists to bridge async record arrival with request/response UX.
+#[allow(clippy::too_many_arguments)]
 async fn match_pending_requests(
     pending: &Arc<Mutex<HashMap<String, PendingRequest>>>,
     relay_pool: &relay::RelayPool,
@@ -2125,6 +2121,7 @@ fn build_gateway_service_install_status_payload(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_gateway_zone_sync_status_payload(
     req: &GatewayZoneSyncRequest,
     gateway_pk: &str,
@@ -2153,6 +2150,7 @@ fn build_gateway_zone_sync_status_payload(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_gateway_managed_launch_status_payload(
     req: &GatewayManagedLaunchRequest,
     gateway_pk: &str,
@@ -2243,7 +2241,8 @@ fn service_sources_from_config(cameras: &[Value]) -> Vec<String> {
     cameras
         .iter()
         .filter_map(|entry| {
-            entry.get("source_id")
+            entry
+                .get("source_id")
                 .and_then(|v| v.as_str())
                 .or_else(|| entry.get("sourceId").and_then(|v| v.as_str()))
                 .map(|v| v.trim().to_string())
@@ -2251,7 +2250,6 @@ fn service_sources_from_config(cameras: &[Value]) -> Vec<String> {
         .filter(|entry| !entry.is_empty())
         .collect()
 }
-
 
 fn build_device_record_event(
     pubkey: &str,
@@ -2273,6 +2271,7 @@ fn build_device_record_event(
     nostr::sign_event(&unsigned, sk_hex)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn publish_current_device_record(
     pubkey: &str,
     sk_hex: &str,
@@ -2407,10 +2406,10 @@ fn is_self_test_ack(frame: &str, event_id: &str) -> bool {
         }
         Some("EVENT") => {
             let ev = arr.get(1).and_then(|v| v.as_object());
-            match ev.and_then(|o| o.get("id")).and_then(|v| v.as_str()) {
-                Some(id) if id == event_id => true,
-                _ => false,
-            }
+            matches!(
+                ev.and_then(|o| o.get("id")).and_then(|v| v.as_str()),
+                Some(id) if id == event_id
+            )
         }
         _ => false,
     }
@@ -2422,7 +2421,7 @@ fn extract_event(frame: &str) -> Option<Value> {
     if arr.is_empty() {
         return None;
     }
-    if arr.get(0)?.as_str()? != "EVENT" {
+    if arr.first()?.as_str()? != "EVENT" {
         return None;
     }
     let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
@@ -2491,7 +2490,7 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
 fn event_zone_tags(ev: &nostr::NostrEvent, zone_keys: &HashSet<String>) -> Vec<String> {
     let mut out = Vec::new();
     for tag in &ev.tags {
-        if tag.get(0).map(|v| v.as_str()) != Some("z") {
+        if tag.first().map(|v| v.as_str()) != Some("z") {
             continue;
         }
         let z = tag.get(1).map(|v| v.trim()).unwrap_or("");
@@ -2680,6 +2679,7 @@ async fn mesh_request_dht_record(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mesh_forward_record_request(
     udp: &Arc<transport::UdpHandle>,
     quic: Option<&Arc<transport::QuicHandle>>,
@@ -2995,10 +2995,8 @@ async fn process_inbound_event(
                 }
             }
         }
-        if kind == "pair_approve" {
-            if handle_pair_approve_event(&ctx, &nostr_ev, &payload).await {
-                return;
-            }
+        if kind == "pair_approve" && handle_pair_approve_event(&ctx, &nostr_ev, &payload).await {
+            return;
         }
 
         if kind == "gateway_service_install_request" {
@@ -3026,7 +3024,7 @@ async fn process_inbound_event(
             return;
         }
 
-        if kind == "swarm_record_request" || kind == "swarm_discovery_request" {
+        if kind == "swarm_record_request" {
             let zone = payload_zone(&payload);
             let identity_id = payload
                 .get("identityId")
@@ -3706,7 +3704,7 @@ fn round_pct(value: f32) -> f32 {
     if !value.is_finite() {
         return 0.0;
     }
-    let clamped = value.max(0.0).min(100.0);
+    let clamped = value.clamp(0.0, 100.0);
     (clamped * 10.0).round() / 10.0
 }
 fn random_hex(bytes_len: usize) -> String {
@@ -3732,7 +3730,7 @@ fn save_config(path: &PathBuf, cfg: &Config) -> Option<()> {
 fn collect_seed_zones(data_dir: &str, args_zones: &[String]) -> Vec<ZoneConfig> {
     let mut zones: Vec<ZoneConfig> = Vec::new();
 
-    if let Some(k) = read_zone_seed_snapctl() {
+    if let Some(k) = read_zone_seed_file(data_dir) {
         if util::is_valid_zone_key(&k) {
             zones.push(ZoneConfig {
                 key: k,
@@ -3742,22 +3740,11 @@ fn collect_seed_zones(data_dir: &str, args_zones: &[String]) -> Vec<ZoneConfig> 
     }
 
     if zones.is_empty() {
-        if let Some(k) = read_zone_seed_file(data_dir) {
-            if util::is_valid_zone_key(&k) {
-                zones.push(ZoneConfig {
-                    key: k,
-                    name: "Joined".to_string(),
-                });
-            }
-        }
-    }
-
-    if zones.is_empty() {
         if let Ok(k) = std::env::var("CONSTITUTE_GATEWAY_ZONE") {
             let key = k.trim().to_string();
             if util::is_valid_zone_key(&key) {
                 zones.push(ZoneConfig {
-                    key: key,
+                    key,
                     name: "Joined".to_string(),
                 });
             }
@@ -3769,7 +3756,7 @@ fn collect_seed_zones(data_dir: &str, args_zones: &[String]) -> Vec<ZoneConfig> 
             let key = k.trim().to_string();
             if util::is_valid_zone_key(&key) {
                 zones.push(ZoneConfig {
-                    key: key,
+                    key,
                     name: "Joined".to_string(),
                 });
             }
@@ -3791,27 +3778,6 @@ fn read_zone_seed_file(data_dir: &str) -> Option<String> {
     }
 }
 
-fn read_zone_seed_snapctl() -> Option<String> {
-    // Legacy compatibility fallback for older snap-based deployments.
-    if std::env::var("SNAP").is_err() && std::env::var("SNAP_NAME").is_err() {
-        return None;
-    }
-    let out = Command::new("snapctl")
-        .arg("get")
-        .arg("zone")
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let raw = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    if raw.is_empty() || raw == "null" {
-        return None;
-    }
-    let _ = Command::new("snapctl").arg("unset").arg("zone").output();
-    Some(raw)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3820,24 +3786,28 @@ mod tests {
 
     #[test]
     fn node_role_prefers_explicit_role() {
-        let mut cfg = Config::default();
-        cfg.node_role = "native_ingest".to_string();
-        cfg.node_type = Some("gateway".to_string());
+        let cfg = Config {
+            node_role: "native_ingest".to_string(),
+            ..Default::default()
+        };
         assert_eq!(resolve_node_role(&cfg), "native_ingest");
     }
 
     #[test]
-    fn node_role_uses_legacy_node_type_when_role_missing() {
-        let mut cfg = Config::default();
-        cfg.node_type = Some("browser".to_string());
-        assert_eq!(resolve_node_role(&cfg), "browser");
+    fn node_role_defaults_to_gateway_when_role_missing() {
+        let cfg = Config {
+            node_role: "".to_string(),
+            ..Default::default()
+        };
+        assert_eq!(resolve_node_role(&cfg), "gateway");
     }
 
     #[test]
     fn node_role_defaults_to_gateway_for_invalid_inputs() {
-        let mut cfg = Config::default();
-        cfg.node_role = "".to_string();
-        cfg.node_type = Some("bad role!".to_string());
+        let cfg = Config {
+            node_role: "".to_string(),
+            ..Default::default()
+        };
         assert_eq!(resolve_node_role(&cfg), "gateway");
     }
 
@@ -3915,7 +3885,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn web_bridge_swarm_discovery_request() {
+    async fn web_bridge_swarm_record_request() {
         let (pk, sk) = nostr::generate_keypair();
         let zone = "zone-test".to_string();
         let zones = vec![zone.clone()];
@@ -4038,7 +4008,7 @@ mod tests {
             .expect("req");
 
         let payload = json!({
-            "type": "swarm_discovery_request",
+            "type": "swarm_record_request",
             "want": ["identity", "device"],
         });
         let req_ev = build_app_event(&pk, &sk, &payload).expect("app event");
@@ -4066,7 +4036,7 @@ mod tests {
                         Some(a) => a,
                         None => continue,
                     };
-                    if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
+                    if arr.first().and_then(|v| v.as_str()) != Some("EVENT") {
                         continue;
                     }
                     let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
@@ -4252,7 +4222,7 @@ mod tests {
                         Err(_) => continue,
                     };
                     let arr = match v.as_array() { Some(a) => a, None => continue };
-                    if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
+                    if arr.first().and_then(|v| v.as_str()) != Some("EVENT") {
                         continue;
                     }
                     let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
@@ -4261,12 +4231,11 @@ mod tests {
                         Ok(v) => v,
                         Err(_) => continue,
                     };
-                    if payload.get("type").and_then(|v| v.as_str()) == Some("swarm_identity_record") {
-                        if payload.get("requestId").and_then(|v| v.as_str()) == Some("req-42") {
+                    if payload.get("type").and_then(|v| v.as_str()) == Some("swarm_identity_record")
+                        && payload.get("requestId").and_then(|v| v.as_str()) == Some("req-42") {
                             got_identity = true;
                             break;
                         }
-                    }
                 }
             }
         }
@@ -4411,7 +4380,7 @@ mod tests {
                         Err(_) => continue,
                     };
                     let arr = match v.as_array() { Some(a) => a, None => continue };
-                    if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
+                    if arr.first().and_then(|v| v.as_str()) != Some("EVENT") {
                         continue;
                     }
                     let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };

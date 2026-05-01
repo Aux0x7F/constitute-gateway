@@ -121,6 +121,7 @@ pub struct SwarmDeviceRecord {
 }
 
 impl SwarmDeviceRecord {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device_pk: &str,
         identity_id: &str,
@@ -244,6 +245,7 @@ impl HostedServiceRecord {
 }
 
 impl DiscoveryClient {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: relay::RelayPool,
         device_record: SwarmDeviceRecord,

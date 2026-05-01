@@ -1,11 +1,12 @@
 # Gateway Protocol Contract
 
-This document defines the protocol contract for `constitute-gateway` and the expected convergence surface with the web repository.
+This document defines the protocol contract for `constitute-gateway` and the expected convergence surface with the first-party browser repos.
 
 ## Contract Status
 - Status: `active`
-- Scope: gateway runtime, web<->gateway app channel, managed service launch/signaling, gateway<->gateway transport
-- Compatibility rule: additive changes only unless a version gate is introduced and implemented on both gateway and web
+- Scope: gateway runtime, browser<->gateway app channel, managed service launch/signaling, gateway<->gateway transport
+- Browser-facing repos currently include `constitute-account`, `constitute-gateway-ui`, and `constitute-nvr-ui`.
+- Change rule: this pre-prod contract may break only when the active project contract moves all affected repos together.
 
 ## Canonical Terms
 - `devicePk`: Nostr public key that identifies a runtime node
@@ -16,6 +17,7 @@ This document defines the protocol contract for `constitute-gateway` and the exp
 - `service`: service slug for service-backed devices
 - `hostGatewayPk`: gateway device public key that hosts a service-backed device
 - `launchToken`: short-lived gateway-issued authorization for managed app launch/session setup
+- `serviceCapability`: planned explicit cryptographic service-access capability that may supersede launch-token-only admission semantics
 
 ## Node Roles
 The role vocabulary is shared across discovery and presence payloads:
@@ -95,7 +97,6 @@ App-channel events are Nostr events tagged with `['t', 'constitute']`.
 ### Request: Record Lookup
 Incoming types accepted by gateway:
 - `swarm_record_request`
-- `swarm_discovery_request` (compat alias)
 
 Fields:
 - `requestId` (optional)
@@ -103,7 +104,7 @@ Fields:
 - `zone` (optional)
 - `identityId` (optional)
 - `devicePk` (optional)
-- `want` (optional array: `identity`, `device`, `dht`; defaults depend on request type)
+- `want` (optional array: `identity`, `device`, `dht`)
 
 Gateway responses:
 - `swarm_identity_record`
@@ -148,7 +149,7 @@ Optional fields:
 - `authorizedDevicePks`
 - `swarmPeers`
 - `publicWsUrl`
-- `allowUnsignedHelloMvp`
+- `allowUnsignedDebugHello`
 - `reolink*` provisioning hints
 - `storageRoot`
 - `timeoutSecs`
@@ -194,6 +195,12 @@ Validation rules:
 - requesting device must hold the requested capability
 - launch token must be short-lived and service-scoped
 
+Planned convergence direction:
+- the launch token is a transitional short-lived bearer-style capability
+- future service access should be represented as an explicit cryptographic capability bound to identity, requesting device, gateway, service, scope, expiry, and nonce/replay protection
+- sensitive session material must be encrypted to intended principals/devices, not merely signed
+- direct first-party app entry should be able to resolve valid retained account/runtime capability state without requiring a manual account-app visit first
+
 ### Request: Managed Service Signaling
 Incoming type:
 - `gateway_signal_request`
@@ -209,7 +216,7 @@ Required fields:
 - `payload`
 - `launchToken`
 
-`signalType` values for MVP:
+Current `signalType` values:
 - `offer`
 - `answer`
 - `ice_candidate`
@@ -299,6 +306,10 @@ Runtime behavior:
 - Same-LAN host ICE candidates are preferred.
 - NAT-friendly server reflexive candidates are allowed.
 - Hard-NAT guaranteed fallback via TURN is not required for this iteration unless operator TURN is present.
+- WebRTC media is encrypted in transit through DTLS-SRTP.
+- Gateway should not become the routine media data path when direct authorized browser-to-service media can be established.
+- Media projection, transcoding, and recording remain workload concerns, not gateway protocol responsibilities.
+- Signed discovery, launch, or signaling records are not confidential unless their sensitive fields are encrypted.
 
 ## Validation and Security Invariants
 
@@ -343,6 +354,6 @@ The following are executed during convergence:
 - shared test vectors for accepted/rejected envelopes
 
 ## Versioning Policy
-- Keep this contract backward-compatible whenever possible.
-- For breaking changes, add an explicit version marker and dual-accept period.
-- Remove legacy aliases only after web and gateway both pass compatibility tests.
+- This pre-prod contract may break when the active project contract changes.
+- Do not keep stale aliases once all in-repo callers have moved.
+- Add explicit version markers when the protocol graduates beyond pre-prod convergence.

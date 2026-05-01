@@ -11,7 +11,6 @@ param(
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $configExample = Join-Path $repo 'config.example.json'
-$legacyConfig = Join-Path $repo 'config.json'
 
 function Download-WithRetry([string]$Uri, [string]$OutFile, [int]$Retries = 4, [int]$DelaySec = 2) {
     for ($i = 0; $i -le $Retries; $i++) {
@@ -109,13 +108,11 @@ function Normalize-Config {
     }
 
     $defaultRelays = @('wss://nos.lol', 'wss://relay.primal.net', 'wss://nostr.mom')
-    $legacyRelays = @('wss://relay.snort.social', 'wss://relay.damus.io')
     $existingRelays = @()
     if ($null -ne $cfg.nostr_relays) {
         $existingRelays = @($cfg.nostr_relays | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
     }
-    $hasCustomRelay = ($existingRelays | Where-Object { $_ -notin $legacyRelays }).Count -gt 0
-    if ($existingRelays.Count -eq 0 -or -not $hasCustomRelay) {
+    if ($existingRelays.Count -eq 0) {
         $cfg | Add-Member -NotePropertyName nostr_relays -NotePropertyValue $defaultRelays -Force
     }
 
@@ -263,18 +260,11 @@ New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 
 if (-not (Test-Path $ConfigPath)) {
-    if (Test-Path $legacyConfig) {
-        Copy-Item $legacyConfig $ConfigPath -Force
-    } elseif (Test-Path $configExample) {
+    if (Test-Path $configExample) {
         Copy-Item $configExample $ConfigPath -Force
     } else {
-        throw "config template missing: expected $legacyConfig or $configExample"
+        throw "config template missing: expected $configExample"
     }
-}
-
-$legacyDataDir = Join-Path $repo 'data'
-if (Test-Path $legacyDataDir) {
-    Copy-Item -Path (Join-Path $legacyDataDir '*') -Destination $dataDir -Recurse -Force -ErrorAction SilentlyContinue
 }
 
 $generatedPairCode = Normalize-Config -Path $ConfigPath -StateRootPath $StateRoot -DefaultDataDir $dataDir -PairIdentityLabel $PairIdentity -ShouldGeneratePairCode $PairGenerate.IsPresent

@@ -8,10 +8,10 @@ This repo is the native gateway dependency for Constitute web clients. Contribut
 - Operational legibility
 
 ## Ground Rules
-- Keep protocol behavior aligned with `constitute` web repo semantics
+- Keep protocol behavior aligned with `constitute-account`, `constitute-gateway-ui`, and app-surface semantics
 - Prefer explicit, testable behavior over convenience abstractions
 - Avoid hidden side effects in transport and relay paths
-- Preserve backward compatibility unless a migration path is defined
+- Do not preserve stale aliases or compatibility shims during pre-prod convergence; update all in-repo callers together
 
 ## Branching and PR Workflow
 1. Keep changes scoped to one behavior theme per PR

@@ -189,8 +189,7 @@ else:
 
 default_relays = [item.strip() for item in os.environ.get("DEFAULT_NOSTR_RELAYS", "").split(",") if item.strip()]
 existing_relays = [str(item).strip() for item in cfg.get("nostr_relays", []) if str(item).strip()]
-legacy_defaults = {"wss://relay.snort.social", "wss://relay.damus.io"}
-if not existing_relays or set(existing_relays).issubset(legacy_defaults):
+if not existing_relays:
     cfg["nostr_relays"] = default_relays
 
 relay_port = str(os.environ.get("RELAY_PORT", "7447")).strip() or "7447"

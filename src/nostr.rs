@@ -191,7 +191,7 @@ fn parse_nostr_pubkey(pk_hex: &str) -> Result<PublicKey> {
 
 fn hex_to_bytes(hex: &str) -> Result<Vec<u8>> {
     let h = hex.trim();
-    if h.len() % 2 != 0 {
+    if !h.len().is_multiple_of(2) {
         return Err(anyhow!("invalid hex"));
     }
     let mut out = Vec::with_capacity(h.len() / 2);
