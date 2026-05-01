@@ -43,6 +43,7 @@ pub struct SwarmStore {
 }
 
 impl SwarmStore {
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }
@@ -151,7 +152,7 @@ fn record_type(ev: &nostr::NostrEvent) -> Option<RecordType> {
     let tags = &ev.tags;
     let has_tag = tags
         .iter()
-        .any(|t| t.get(0) == Some(&"t".to_string()) && t.get(1) == Some(&RECORD_TAG.to_string()));
+        .any(|t| t.first() == Some(&"t".to_string()) && t.get(1) == Some(&RECORD_TAG.to_string()));
     if !has_tag {
         return None;
     }
@@ -252,9 +253,7 @@ fn validate_record(ev: &nostr::NostrEvent, expected: RecordType) -> Option<Recor
             if scope.is_empty() || key.is_empty() {
                 return None;
             }
-            if payload.get("value").is_none() {
-                return None;
-            }
+            payload.get("value")?;
             let author_pk = payload
                 .get("authorPk")
                 .and_then(|v| v.as_str())
@@ -389,7 +388,7 @@ impl SwarmStoreMap {
         if key.is_empty() {
             return None;
         }
-        let store = self.stores.entry(key).or_insert_with(SwarmStore::new);
+        let store = self.stores.entry(key).or_default();
         store.put_record(ev)
     }
 

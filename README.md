@@ -1,6 +1,6 @@
 # Constitute Gateway
 
-Native gateway service for Constitute. This repository provides the native dependency layer that browser clients and native services use for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
+Native gateway service for Constitution browser surfaces. This repository provides the native dependency layer that `constitute-account`, `constitute-gateway-ui`, `constitute-nvr-ui`, and native workloads use for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
 
 ## Scope
 - Nostr-based discovery bootstrap and zone presence publication
@@ -27,10 +27,10 @@ In progress:
 
 ## Installation
 Web workflow:
-- In `constitute` web, open `Settings > Appliances`
-- Use `Download Installer Utility`
+- Open `constitute-gateway-ui`
+- Use the gateway management surface to open install/update flows
 - Run the generated operator command
-- After pairing, use `Configure Zones` in web Appliances to sync identity zones and optional gateway-extra zones
+- After pairing, use gateway zone-sync controls in `constitute-gateway-ui` to sync identity zones and optional gateway-extra zones
 
 CLI and source-build workflow:
 - See [`docs/OPERATOR.md`](docs/OPERATOR.md)

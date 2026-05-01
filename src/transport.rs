@@ -286,6 +286,7 @@ impl UdpHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn forward_record_request(
         &self,
         zone: &str,
@@ -353,8 +354,7 @@ impl UdpHandle {
                     let score = if let Some(k) = key {
                         xor_distance(&key_bytes(k), &peer_bytes(&info.device_pk))
                     } else {
-                        let zero = [0u8; 32];
-                        zero
+                        [0u8; 32]
                     };
                     Some((*addr, score))
                 })
@@ -447,7 +447,7 @@ async fn run_udp_loop(
     table: Arc<Mutex<HashMap<SocketAddr, PeerInfo>>>,
     mut outbound_rx: mpsc::UnboundedReceiver<UdpOutbound>,
 ) -> Result<()> {
-    let max_packet_bytes = cfg.max_packet_bytes.max(256).min(65507);
+    let max_packet_bytes = cfg.max_packet_bytes.clamp(256, 65507);
     let mut buf = vec![0u8; max_packet_bytes];
     let mut hello_tick = interval(cfg.handshake_interval.max(Duration::from_secs(1)));
     let mut prune_tick = interval(Duration::from_secs(5));
@@ -630,13 +630,7 @@ async fn handle_message(
                 zones: cfg.zones.clone(),
                 ts: now_ms(),
             };
-            send_message(
-                socket,
-                from,
-                &reply,
-                cfg.max_packet_bytes.max(256).min(65507),
-            )
-            .await;
+            send_message(socket, from, &reply, cfg.max_packet_bytes.clamp(256, 65507)).await;
         }
         UdpMessage::Ack {
             v,
@@ -1177,6 +1171,7 @@ impl QuicHandle {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn forward_record_request(
         &self,
         zone: &str,
@@ -1334,7 +1329,7 @@ async fn run_quic_loop(
     connections: Arc<Mutex<HashMap<SocketAddr, QuinnConnection>>>,
     mut outbound_rx: mpsc::UnboundedReceiver<UdpOutbound>,
 ) -> Result<()> {
-    let max_packet_bytes = cfg.max_packet_bytes.max(256).min(65507);
+    let max_packet_bytes = cfg.max_packet_bytes.clamp(256, 65507);
     let mut hello_tick = interval(cfg.handshake_interval.max(Duration::from_secs(1)));
     let mut prune_tick = interval(Duration::from_secs(5));
 

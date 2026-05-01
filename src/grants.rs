@@ -221,7 +221,9 @@ fn lease_key(service_pk: &str, source_id: &str) -> String {
 
 fn cleanup_control_leases(state: &mut GrantState) {
     let now_ms = util::now_unix_seconds() * 1000;
-    state.control_leases.retain(|_, lease| lease.expires_at > now_ms);
+    state
+        .control_leases
+        .retain(|_, lease| lease.expires_at > now_ms);
 }
 
 fn persist_grants(data_dir: &str, state: &GrantState) -> Result<()> {
@@ -244,7 +246,8 @@ pub(super) fn load_grant_state(data_dir: &str) -> GrantState {
         Ok(raw) => raw,
         Err(_) => return GrantState::default(),
     };
-    let parsed: PersistedGrantStore = serde_json::from_str(&raw).unwrap_or(PersistedGrantStore { grants: Vec::new() });
+    let parsed: PersistedGrantStore =
+        serde_json::from_str(&raw).unwrap_or(PersistedGrantStore { grants: Vec::new() });
     GrantState {
         grants: parsed.grants,
         control_leases: HashMap::new(),
@@ -433,7 +436,10 @@ pub(super) async fn resolve_scope_for_request(
     capability: &str,
     cameras: &[CameraResource],
 ) -> Result<GrantScope> {
-    if !matches!((service.trim(), capability.trim()), ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.launch_managed_app")) {
+    if !matches!(
+        (service.trim(), capability.trim()),
+        ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.launch_managed_app")
+    ) {
         return Err(anyhow!("unsupported capability"));
     }
     if !requester_matches_identity(ctx, requester_pk, identity_id).await {
@@ -580,55 +586,117 @@ pub(super) async fn handle_gateway_grant_request(
         req.device_pk = requester_pk.clone();
     }
 
-    let publish_status = |status: &str,
-                          grant: Option<Value>,
-                          grants: Option<Value>,
-                          shared_resources: Option<Value>,
-                          available_cameras: Option<Value>,
-                          reason: Option<String>,
-                          detail: Option<String>| GatewayGrantStatusPayload {
-        kind: "gateway_grant_status".to_string(),
-        request_id: req.request_id.clone(),
-        status: status.to_string(),
-        to_device_pk: req.to_device_pk.clone(),
-        gateway_pk: ctx.self_pk.clone(),
-        identity_id: req.identity_id.clone(),
-        device_pk: req.device_pk.clone(),
-        service_pk: req.service_pk.clone(),
-        service: req.service.clone(),
-        action: req.action.clone(),
-        grant,
-        grants,
-        shared_resources,
-        available_cameras,
-        control_lease: None,
-        reason,
-        detail,
-        ts: util::now_unix_seconds() * 1000,
-    };
+    let publish_status =
+        |status: &str,
+         grant: Option<Value>,
+         grants: Option<Value>,
+         shared_resources: Option<Value>,
+         available_cameras: Option<Value>,
+         reason: Option<String>,
+         detail: Option<String>| GatewayGrantStatusPayload {
+            kind: "gateway_grant_status".to_string(),
+            request_id: req.request_id.clone(),
+            status: status.to_string(),
+            to_device_pk: req.to_device_pk.clone(),
+            gateway_pk: ctx.self_pk.clone(),
+            identity_id: req.identity_id.clone(),
+            device_pk: req.device_pk.clone(),
+            service_pk: req.service_pk.clone(),
+            service: req.service.clone(),
+            action: req.action.clone(),
+            grant,
+            grants,
+            shared_resources,
+            available_cameras,
+            control_lease: None,
+            reason,
+            detail,
+            ts: util::now_unix_seconds() * 1000,
+        };
 
     if requester_pk != req.device_pk {
-        let status = publish_status("rejected", None, None, None, None, Some("requester_device_mismatch".to_string()), Some("requesting event pubkey does not match devicePk".to_string()));
-        let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+        let status = publish_status(
+            "rejected",
+            None,
+            None,
+            None,
+            None,
+            Some("requester_device_mismatch".to_string()),
+            Some("requesting event pubkey does not match devicePk".to_string()),
+        );
+        let _ = publish_gateway_grant_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
         return;
     }
 
     if !requester_matches_identity(ctx, &requester_pk, &req.identity_id).await {
-        let status = publish_status("rejected", None, None, None, None, Some("unauthorized_requester".to_string()), Some("requester is not authorized for this identity".to_string()));
-        let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+        let status = publish_status(
+            "rejected",
+            None,
+            None,
+            None,
+            None,
+            Some("unauthorized_requester".to_string()),
+            Some("requester is not authorized for this identity".to_string()),
+        );
+        let _ = publish_gateway_grant_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
         return;
     }
 
-    let hosted = match managed::load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
+    let hosted = match managed::load_target_hosted_service(ctx, &req.service_pk, &req.service).await
+    {
         Ok(service) => service,
         Err(err) => {
             if req.action == "list_shared" {
-                let status = publish_status("complete", None, None, Some(json!([])), Some(json!([])), None, None);
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "complete",
+                    None,
+                    None,
+                    Some(json!([])),
+                    Some(json!([])),
+                    None,
+                    None,
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
-            let status = publish_status("failed", None, None, None, None, Some("service_unavailable".to_string()), Some(err.to_string()));
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "failed",
+                None,
+                None,
+                None,
+                None,
+                Some("service_unavailable".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
             return;
         }
     };
@@ -636,17 +704,57 @@ pub(super) async fn handle_gateway_grant_request(
 
     match req.action.as_str() {
         "list_shared" => {
-            let shared_resources = match scope_for_identity(ctx, &req.identity_id, &hosted.record.device_pk, &hosted.record.service, &cameras).await {
-                Ok(scope) if !scope.owner => json!([build_shared_resource_projection(&hosted, &scope)]),
+            let shared_resources = match scope_for_identity(
+                ctx,
+                &req.identity_id,
+                &hosted.record.device_pk,
+                &hosted.record.service,
+                &cameras,
+            )
+            .await
+            {
+                Ok(scope) if !scope.owner => {
+                    json!([build_shared_resource_projection(&hosted, &scope)])
+                }
                 _ => json!([]),
             };
-            let status = publish_status("complete", None, None, Some(shared_resources), Some(camera_list_items(&cameras)), None, None);
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "complete",
+                None,
+                None,
+                Some(shared_resources),
+                Some(camera_list_items(&cameras)),
+                None,
+                None,
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
         }
         "list_grants" => {
             if req.identity_id.trim() != ctx.gateway_identity_id.trim() {
-                let status = publish_status("rejected", None, None, None, None, Some("owner_required".to_string()), Some("only the gateway owner can list grants".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("owner_required".to_string()),
+                    Some("only the gateway owner can list grants".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
             let grants_value = {
@@ -659,42 +767,138 @@ pub(super) async fn handle_gateway_grant_request(
                         .filter(|grant| active_grant(grant))
                         .filter(|grant| grant.gateway_pk.trim() == ctx.self_pk.trim())
                         .filter(|grant| grant.service_pk.trim() == hosted.record.device_pk.trim())
-                        .filter(|grant| grant.service.trim().eq_ignore_ascii_case(&hosted.record.service))
+                        .filter(|grant| {
+                            grant
+                                .service
+                                .trim()
+                                .eq_ignore_ascii_case(&hosted.record.service)
+                        })
                         .map(grant_view)
                         .collect(),
                 )
             };
-            let status = publish_status("complete", None, Some(grants_value), None, Some(camera_list_items(&cameras)), None, None);
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "complete",
+                None,
+                Some(grants_value),
+                None,
+                Some(camera_list_items(&cameras)),
+                None,
+                None,
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
         }
         "upsert" => {
             if req.identity_id.trim() != ctx.gateway_identity_id.trim() {
-                let status = publish_status("rejected", None, None, None, None, Some("owner_required".to_string()), Some("only the gateway owner can modify grants".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("owner_required".to_string()),
+                    Some("only the gateway owner can modify grants".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
             if req.grantee_identity_id.is_empty() {
-                let status = publish_status("rejected", None, None, None, None, Some("missing_grantee".to_string()), Some("granteeIdentityId is required".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("missing_grantee".to_string()),
+                    Some("granteeIdentityId is required".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
             if req.grantee_identity_id.trim() == ctx.gateway_identity_id.trim() {
-                let status = publish_status("rejected", None, None, None, None, Some("invalid_grantee".to_string()), Some("owner does not need an explicit grant".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("invalid_grantee".to_string()),
+                    Some("owner does not need an explicit grant".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
-            let available_view = dedup_source_ids(cameras.iter().map(|camera| camera.source_id.clone()));
-            let available_control = dedup_source_ids(cameras.iter().filter(|camera| camera.ptz_capable).map(|camera| camera.source_id.clone()));
-            let mut view_sources = dedup_source_ids(req.view_sources.iter().filter(|source| available_view.contains(source)).cloned());
-            let control_sources = dedup_source_ids(req.control_sources.iter().filter(|source| available_control.contains(source)).cloned());
+            let available_view =
+                dedup_source_ids(cameras.iter().map(|camera| camera.source_id.clone()));
+            let available_control = dedup_source_ids(
+                cameras
+                    .iter()
+                    .filter(|camera| camera.ptz_capable)
+                    .map(|camera| camera.source_id.clone()),
+            );
+            let mut view_sources = dedup_source_ids(
+                req.view_sources
+                    .iter()
+                    .filter(|source| available_view.contains(source))
+                    .cloned(),
+            );
+            let control_sources = dedup_source_ids(
+                req.control_sources
+                    .iter()
+                    .filter(|source| available_control.contains(source))
+                    .cloned(),
+            );
             for source in &control_sources {
                 if !view_sources.contains(source) {
                     view_sources.push(source.clone());
                 }
             }
             if view_sources.is_empty() {
-                let status = publish_status("rejected", None, None, None, Some(camera_list_items(&cameras)), Some("missing_view_sources".to_string()), Some("select at least one camera to grant live view".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    Some(camera_list_items(&cameras)),
+                    Some("missing_view_sources".to_string()),
+                    Some("select at least one camera to grant live view".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
             let now_ms = util::now_unix_seconds() * 1000;
@@ -705,7 +909,10 @@ pub(super) async fn handle_gateway_grant_request(
                     active_grant(grant)
                         && grant.gateway_pk.trim() == ctx.self_pk.trim()
                         && grant.service_pk.trim() == hosted.record.device_pk.trim()
-                        && grant.service.trim().eq_ignore_ascii_case(&hosted.record.service)
+                        && grant
+                            .service
+                            .trim()
+                            .eq_ignore_ascii_case(&hosted.record.service)
                         && grant.grantee_identity_id.trim() == req.grantee_identity_id.trim()
                 });
                 let grant = if let Some(index) = existing_idx {
@@ -717,7 +924,11 @@ pub(super) async fn handle_gateway_grant_request(
                     grant.clone()
                 } else {
                     let grant = GatewayGrantRecord {
-                        grant_id: if req.grant_id.is_empty() { format!("grant-{}", random_hex(8)) } else { req.grant_id.clone() },
+                        grant_id: if req.grant_id.is_empty() {
+                            format!("grant-{}", random_hex(8))
+                        } else {
+                            req.grant_id.clone()
+                        },
                         owner_identity_id: ctx.gateway_identity_id.clone(),
                         grantee_identity_id: req.grantee_identity_id.clone(),
                         gateway_pk: ctx.self_pk.clone(),
@@ -737,13 +948,43 @@ pub(super) async fn handle_gateway_grant_request(
                 }
                 grant
             };
-            let status = publish_status("complete", Some(grant_view(&grant)), None, None, Some(camera_list_items(&cameras)), None, None);
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "complete",
+                Some(grant_view(&grant)),
+                None,
+                None,
+                Some(camera_list_items(&cameras)),
+                None,
+                None,
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
         }
         "revoke" => {
             if req.identity_id.trim() != ctx.gateway_identity_id.trim() {
-                let status = publish_status("rejected", None, None, None, None, Some("owner_required".to_string()), Some("only the gateway owner can revoke grants".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("owner_required".to_string()),
+                    Some("only the gateway owner can revoke grants".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             }
             let revoked = {
@@ -754,9 +995,14 @@ pub(super) async fn handle_gateway_grant_request(
                 for grant in &mut grant_state.grants {
                     let matches_service = grant.gateway_pk.trim() == ctx.self_pk.trim()
                         && grant.service_pk.trim() == hosted.record.device_pk.trim()
-                        && grant.service.trim().eq_ignore_ascii_case(&hosted.record.service);
-                    let matches_grant = (!req.grant_id.is_empty() && grant.grant_id.trim() == req.grant_id.trim())
-                        || (!req.grantee_identity_id.is_empty() && grant.grantee_identity_id.trim() == req.grantee_identity_id.trim());
+                        && grant
+                            .service
+                            .trim()
+                            .eq_ignore_ascii_case(&hosted.record.service);
+                    let matches_grant = (!req.grant_id.is_empty()
+                        && grant.grant_id.trim() == req.grant_id.trim())
+                        || (!req.grantee_identity_id.is_empty()
+                            && grant.grantee_identity_id.trim() == req.grantee_identity_id.trim());
                     if active_grant(grant) && matches_service && matches_grant {
                         grant.revoked_at = now_ms;
                         grant.updated_at = now_ms;
@@ -772,16 +1018,61 @@ pub(super) async fn handle_gateway_grant_request(
                 out
             };
             let Some(revoked) = revoked else {
-                let status = publish_status("rejected", None, None, None, Some(camera_list_items(&cameras)), Some("grant_not_found".to_string()), Some("matching active grant was not found".to_string()));
-                let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+                let status = publish_status(
+                    "rejected",
+                    None,
+                    None,
+                    None,
+                    Some(camera_list_items(&cameras)),
+                    Some("grant_not_found".to_string()),
+                    Some("matching active grant was not found".to_string()),
+                );
+                let _ = publish_gateway_grant_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
                 return;
             };
-            let status = publish_status("complete", Some(grant_view(&revoked)), None, None, Some(camera_list_items(&cameras)), None, None);
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "complete",
+                Some(grant_view(&revoked)),
+                None,
+                None,
+                Some(camera_list_items(&cameras)),
+                None,
+                None,
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
         }
         _ => {
-            let status = publish_status("rejected", None, None, None, None, Some("unsupported_action".to_string()), Some("unsupported gateway grant action".to_string()));
-            let _ = publish_gateway_grant_status(&ctx.relay_pool, &ctx.local_relay, &ctx.self_pk, &ctx.self_sk, &status).await;
+            let status = publish_status(
+                "rejected",
+                None,
+                None,
+                None,
+                None,
+                Some("unsupported_action".to_string()),
+                Some("unsupported gateway grant action".to_string()),
+            );
+            let _ = publish_gateway_grant_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
         }
     }
 }

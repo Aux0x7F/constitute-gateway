@@ -180,6 +180,7 @@ fn load_tls_acceptor(cert_path: &str, key_path: &str) -> Result<TlsAcceptor> {
     Ok(TlsAcceptor::from(Arc::new(cfg)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_ws_listener(
     listener: TcpListener,
     bind: String,
@@ -229,6 +230,7 @@ fn spawn_ws_listener(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_wss_listener(
     listener: TcpListener,
     bind: String,
@@ -552,6 +554,7 @@ async fn publish_event(
 }
 
 // Each client connection maintains subscription filters and enforces per-connection limits.
+#[allow(clippy::too_many_arguments)]
 async fn handle_client<S>(
     stream: S,
     addr: SocketAddr,
@@ -773,8 +776,8 @@ fn event_has_tag_any(ev: &Value, key: &str, values: &[String]) -> bool {
 }
 
 fn is_allowed_event(ev: &Value) -> bool {
-    event_has_tag_any(ev, "t", &vec!["constitute".to_string()])
-        || event_has_tag_any(ev, "t", &vec!["swarm_discovery".to_string()])
+    event_has_tag_any(ev, "t", &["constitute".to_string()])
+        || event_has_tag_any(ev, "t", &["swarm_discovery".to_string()])
 }
 
 #[cfg(test)]
@@ -940,27 +943,24 @@ mod tests {
             tokio::select! {
                 _ = &mut deadline => break,
                 msg = w2_rx.next() => {
-                    match msg {
-                        Some(Ok(Message::Text(txt))) => {
-                            let v: Value = match serde_json::from_str(&txt) {
-                                Ok(v) => v,
-                                Err(_) => continue,
-                            };
-                            let arr = match v.as_array() {
-                                Some(a) => a,
-                                None => continue,
-                            };
-                            if arr.get(0).and_then(|v| v.as_str()) != Some("EVENT") {
-                                continue;
-                            }
-                            let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
-                            let id = ev_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            if id == ev_id {
-                                received = true;
-                                break;
-                            }
+                    if let Some(Ok(Message::Text(txt))) = msg {
+                        let v: Value = match serde_json::from_str(&txt) {
+                            Ok(v) => v,
+                            Err(_) => continue,
+                        };
+                        let arr = match v.as_array() {
+                            Some(a) => a,
+                            None => continue,
+                        };
+                        if arr.first().and_then(|v| v.as_str()) != Some("EVENT") {
+                            continue;
                         }
-                        _ => {}
+                        let ev_val = if arr.len() >= 3 { &arr[2] } else { &arr[1] };
+                        let id = ev_val.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        if id == ev_id {
+                            received = true;
+                            break;
+                        }
                     }
                 }
             }
@@ -1040,7 +1040,7 @@ mod tests {
                         Err(_) => continue,
                     };
                     let arr = match v.as_array() { Some(a) => a, None => continue };
-                    if arr.get(0).and_then(|v| v.as_str()) == Some("EVENT") {
+                    if arr.first().and_then(|v| v.as_str()) == Some("EVENT") {
                         saw_event = true;
                         break;
                     }

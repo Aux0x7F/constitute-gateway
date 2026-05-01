@@ -131,7 +131,11 @@ pub(super) fn gateway_offer_candidates(payload: &Value) -> Value {
         }
     };
     push_array(payload.get("candidates"));
-    push_array(payload.get("offer").and_then(|value| value.get("candidates")));
+    push_array(
+        payload
+            .get("offer")
+            .and_then(|value| value.get("candidates")),
+    );
     Value::Array(items)
 }
 
@@ -307,7 +311,10 @@ async fn load_hosted_nvr_service_from_manifest(
     })
 }
 
-async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Option<HostedNvrService> {
+async fn load_hosted_nvr_service(
+    client: &HttpClient,
+    gateway_pk: &str,
+) -> Option<HostedNvrService> {
     for path in nvr_manifest_candidates() {
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -317,7 +324,9 @@ async fn load_hosted_nvr_service(client: &HttpClient, gateway_pk: &str) -> Optio
             Ok(manifest) => manifest,
             Err(_) => continue,
         };
-        if let Some(service) = load_hosted_nvr_service_from_manifest(client, gateway_pk, &manifest).await {
+        if let Some(service) =
+            load_hosted_nvr_service_from_manifest(client, gateway_pk, &manifest).await
+        {
             return Some(service);
         }
     }
@@ -511,7 +520,9 @@ fn build_managed_launch_token(
     Ok(serde_json::to_string(&ev)?)
 }
 
-fn parse_managed_launch_token(token: &str) -> Result<(nostr::NostrEvent, ManagedLaunchTokenPayload)> {
+fn parse_managed_launch_token(
+    token: &str,
+) -> Result<(nostr::NostrEvent, ManagedLaunchTokenPayload)> {
     let ev: nostr::NostrEvent = serde_json::from_str(token).context("invalid launch token json")?;
     if !nostr::verify_event(&ev)? {
         return Err(anyhow!("invalid launch token signature"));
@@ -703,7 +714,9 @@ fn build_managed_service_display(
     })
 }
 
-pub(super) fn camera_resources_from_hosted(hosted: &HostedNvrService) -> Vec<grants::CameraResource> {
+pub(super) fn camera_resources_from_hosted(
+    hosted: &HostedNvrService,
+) -> Vec<grants::CameraResource> {
     let mut resources = Vec::new();
     let mut seen = HashSet::new();
 
@@ -787,7 +800,9 @@ pub(super) async fn load_target_hosted_service(
         .await
         .ok_or_else(|| anyhow!("hosted nvr service not configured"))?;
     if !service_pk.trim().is_empty() && hosted.record.device_pk.trim() != service_pk.trim() {
-        return Err(anyhow!("requested service pk does not match hosted service"));
+        return Err(anyhow!(
+            "requested service pk does not match hosted service"
+        ));
     }
     Ok(hosted)
 }
@@ -981,8 +996,7 @@ pub(super) async fn handle_gateway_service_install_request(
     let timeout_secs = req
         .timeout_secs
         .unwrap_or(ctx.remote_service_install_timeout_secs)
-        .max(60)
-        .min(7200);
+        .clamp(60, 7200);
 
     let accepted = build_gateway_service_install_status_payload(
         &req,
@@ -1295,16 +1309,13 @@ pub(super) async fn handle_gateway_zone_sync_request(
             continue;
         }
         let name = z.name.trim().to_string();
-        if !names.contains_key(&key) {
-            names.insert(
-                key,
-                if name.is_empty() {
-                    "Joined".to_string()
-                } else {
-                    name
-                },
-            );
-        }
+        names.entry(key).or_insert_with(|| {
+            if name.is_empty() {
+                "Joined".to_string()
+            } else {
+                name
+            }
+        });
     }
 
     let zone_entries: Vec<keystore::ZoneEntry> = effective_zone_keys
@@ -1408,24 +1419,23 @@ pub(super) async fn handle_gateway_managed_launch_request(
         "received managed launch request"
     );
 
-    let publish_status =
-        |status: &str,
-         launch_token: Option<String>,
-         expires_at: Option<u64>,
-         display: Option<Value>,
-         reason: Option<String>,
-         detail: Option<String>| {
-            build_gateway_managed_launch_status_payload(
-                &req,
-                &ctx.self_pk,
-                status,
-                launch_token,
-                expires_at,
-                display,
-                reason,
-                detail,
-            )
-        };
+    let publish_status = |status: &str,
+                          launch_token: Option<String>,
+                          expires_at: Option<u64>,
+                          display: Option<Value>,
+                          reason: Option<String>,
+                          detail: Option<String>| {
+        build_gateway_managed_launch_status_payload(
+            &req,
+            &ctx.self_pk,
+            status,
+            launch_token,
+            expires_at,
+            display,
+            reason,
+            detail,
+        )
+    };
 
     if requester_pk != req.device_pk {
         let status = publish_status(
@@ -1527,7 +1537,8 @@ pub(super) async fn handle_gateway_managed_launch_request(
         issued_at,
         expires_at,
     };
-    let launch_token = match build_managed_launch_token(&ctx.self_pk, &ctx.self_sk, &token_payload) {
+    let launch_token = match build_managed_launch_token(&ctx.self_pk, &ctx.self_sk, &token_payload)
+    {
         Ok(token) => token,
         Err(err) => {
             let status = publish_status(
@@ -2069,4 +2080,3 @@ pub(super) async fn handle_gateway_signal_request(
     )
     .await;
 }
-

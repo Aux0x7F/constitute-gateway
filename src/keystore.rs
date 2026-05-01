@@ -330,7 +330,7 @@ fn encrypt_payload(payload: &StorePayload, key_source: &KeySource) -> Result<Enc
         version: 1,
         kdf,
         salt_b64: STANDARD_NO_PAD.encode(&salt),
-        nonce_b64: STANDARD_NO_PAD.encode(&nonce),
+        nonce_b64: STANDARD_NO_PAD.encode(nonce),
         ciphertext_b64: STANDARD_NO_PAD.encode(&ciphertext),
         mem_kib,
         iterations,

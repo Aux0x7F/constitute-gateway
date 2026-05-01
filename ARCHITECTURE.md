@@ -10,7 +10,8 @@ It is not the permanent UI container for first-party apps, and it is not a paral
 
 ## Alignment With Other Repos
 The active contract slice aligns with:
-- `constitute` for management shell and launch
+- `constitute-account` for browser identity/session/grant authority and shared runtime
+- `constitute-gateway-ui` for gateway-specific management UX
 - `constitute-nvr` for hosted service inventory and live preview signaling
 - `constitute-nvr-ui` for managed app surface bootstrap
 
@@ -101,6 +102,10 @@ Canonical flow:
 5. browser app surface uses gateway-mediated signaling to establish WebRTC with the hosted service
 6. hosted service validates the gateway-issued authorization before admitting the session
 
+Direct app entry is primary. The gateway may participate after the app has attached to account/runtime authority; the user should not need to visit account manually before using a first-party app.
+
+Current launch authorization is a transitional short-lived capability. The target direction is explicit cryptographic service capability state bound to identity, device, gateway, service, scope, expiry, nonce/replay protection, and encrypted session material where confidentiality is required.
+
 ## WebRTC Direction
 Gateway is the signaling/control boundary for browser-safe direct paths:
 - same-LAN clients should win via ICE host candidates
@@ -108,6 +113,7 @@ Gateway is the signaling/control boundary for browser-safe direct paths:
 - hard-NAT fallback via TURN remains a later slice unless operator TURN is already available
 
 Gateway should not force all media through itself if a direct authorized browser-to-service session is available.
+Gateway should also not become the routine media projection or transcoding data path. NVR/media services own media projection; gateway owns admission, signaling, and orchestration.
 
 ## Zone and Overlay Direction
 - UDP gossip remains zone-scoped.
@@ -137,6 +143,39 @@ Active sprint direction:
 - short-lived launch authorization
 - capability-enforced managed service launch
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
+- explicit signed-versus-encrypted audit for launch, signaling, and session metadata
+
+## Planned Host-Capability Direction
+
+This is future host-capability direction, not the current active implementation slice.
+
+- gateway should converge toward orchestrating and projecting host capabilities rather than directly embodying every host concern
+- planned host-local capability services include:
+  - `constitute-security`
+  - `constitute-storage`
+- gateway should:
+  - authorize and coordinate capability use
+  - surface status and notifications
+  - project policy/result state upward to browser surfaces
+- gateway should not become the permanent implementation home for:
+  - firewall/security engines
+  - object-storage engines
+  - every host-level daemon concern
+
+### Current Browser UI Split
+- gateway-specific browser management lives in `constitute-gateway-ui`
+- gateway UI focuses on:
+  - host/service inventory
+  - network posture
+  - security posture
+  - deploy/update/runtime state
+  - hosted-service control
+
+### Planned Capability Leases
+- future workloads should consume explicit host-capability leases instead of embedding those systems directly
+- expected early lease targets:
+  - hostile camera-network policy from `constitute-security`
+  - durable encrypted object/archive allocation from `constitute-storage`
 
 ## Documentation Surface
 - `README.md`
