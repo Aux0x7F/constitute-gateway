@@ -4,19 +4,19 @@ This brief captures execution order across `constitute-gateway`, `constitute-acc
 
 ## Delivery Strategy
 1. Freeze cross-repo contracts for service-backed devices and managed app surfaces.
-2. Implement gateway-managed launch/signaling.
+2. Implement gateway service access/signaling.
 3. Implement NVR live preview over managed WebRTC.
 4. Converge shell and app surfaces against the managed-service contract.
 
 Rationale:
 - Gateway is the browser control dependency for managed services.
 - Contract stability reduces cross-repo thrash.
-- App surfaces should consume stable launch/signaling primitives, not redefine auth or transport.
+- App surfaces should consume stable service access/signaling primitives, not redefine auth or transport.
 
 ## Current Snapshot
 - Gateway: discovery, app-channel bridge, zone-scoped UDP/DHT path, optional QUIC mesh path, and gateway zone-sync/install contracts implemented.
-- Managed-service launch/signaling: active implementation slice.
-- NVR: service install path exists; live preview and managed launch parity remain active work.
+- Managed-service service access/signaling: active implementation slice.
+- NVR: service install path exists; live preview and service access parity remain active work.
 - Browser/runtime split and direct app entry are current convergence work across `constitute-account`, `constitute-ui`, `constitute-gateway-ui`, and app surfaces.
 
 ## Phase Plan
@@ -30,17 +30,17 @@ Objectives:
 Exit criteria:
 - contract docs reviewed and stable across repos
 - default behavior documented without stale aliases
-- no unresolved schema ambiguity for launch/signaling records
+- no unresolved schema ambiguity for service access/signaling records
 
-### Phase B: Gateway Managed Launch and Signaling
+### Phase B: Gateway Service Access and Signaling
 Objectives:
 - publish service-backed device metadata and hosted-service inventory
-- issue short-lived managed launch authorization
+- issue short-lived service access authorization
 - broker browser <-> service signaling for WebRTC
 - expose gateway/service freshness and status cleanly
 
 Exit criteria:
-- launch authorization tests pass
+- service access authorization tests pass
 - signaling contract tests pass
 - hosted-service inventory publishes deterministically
 - same-LAN and NAT-friendly paths have a consistent gateway signaling story
@@ -53,7 +53,7 @@ Objectives:
 - keep direct/manual debug mode available but non-canonical
 
 Exit criteria:
-- at least one live preview tile renders through managed launch
+- at least one live preview tile renders through service access
 - multiple preview tiles can coexist using substreams where available
 - archived segment retrieval still works
 
@@ -61,13 +61,13 @@ Exit criteria:
 Objectives:
 - retire launcher-first shell framing in favor of direct app entry plus `constitute-account`
 - make `constitute-nvr-ui` a clean Pages-hosted app surface
-- remove long-lived secret expectations from managed app launch
+- remove long-lived secret expectations from managed app service access
 - ensure direct app entry does not require a manual account visit before app use
 
 Exit criteria:
-- first-party app launch opens separate app surface cleanly
+- first-party app service access opens separate app surface cleanly
 - account and gateway surfaces keep service-backed devices distinct from user devices
-- launch context/bootstrap works without query-string secrets
+- service access context/bootstrap works without query-string secrets
 
 ## Known Risks and Controls
 - Risk: contract drift during active iteration.
@@ -75,11 +75,11 @@ Exit criteria:
 - Risk: WebRTC complexity slows delivery.
   - Control: keep gateway as signaling boundary and preserve recorded-media fallback.
 - Risk: shell/app bootstrap leaks secrets.
-  - Control: short-lived launch tokens and non-secret launch ids only.
+  - Control: short-lived service capabilities and non-secret service access ids only.
 
 ## Near-Term Priority Order
-1. freeze service-backed device and managed-launch docs
-2. land gateway launch/signaling implementation
+1. freeze service-backed device and managed-service access docs
+2. land gateway service access/signaling implementation
 3. land NVR live preview path
 4. converge shell and NVR UI
 
@@ -95,13 +95,13 @@ The product-surface split is current local convergence work. Host-capability ser
 ### Phase E: Product-Surface Split
 Objectives:
 - keep `constitute-account` as the browser identity/session/grant authority
-- make direct app entry canonical instead of shell-launcher-first
+- make direct app entry canonical instead of shell-first
 - keep gateway-specific management in `constitute-gateway-ui`
 
 Exit criteria:
 - account/profile/device/grant management has a clear primary app boundary
 - gateway-specific host/service management has a separate UI home
-- launcher behavior is convenience/navigation rather than the required primary flow
+- opener behavior is convenience/navigation rather than the required primary flow
 
 ### Phase F: Host-Capability Services
 Objectives:

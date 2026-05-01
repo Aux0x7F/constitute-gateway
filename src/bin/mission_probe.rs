@@ -1,6 +1,10 @@
 use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use constitute_gateway::nostr::{self, NostrEvent};
+use constitute_protocol::{
+    open_envelope, seal_envelope, CaacEnvelope, CAAC_KIND_SERVICE_ACCESS_REQUEST,
+    CAAC_KIND_SERVICE_ACCESS_STATUS,
+};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -8,7 +12,7 @@ use tokio_tungstenite::{connect_async, tungstenite::Message};
 
 #[derive(Parser)]
 #[command(name = "mission_probe")]
-#[command(about = "Small live-mission helper for managed launch probing", long_about = None)]
+#[command(about = "Small live-mission helper for service access probing", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -23,7 +27,7 @@ enum Command {
         #[arg(long = "expected-pk")]
         expected_pk: String,
     },
-    RequestLaunch {
+    RequestServiceAccess {
         #[arg(long)]
         relay: String,
         #[arg(long)]
@@ -93,7 +97,7 @@ async fn recover_sk(partial: &str, expected_pk: &str) -> Result<()> {
     Err(anyhow!("no matching secret key prefix found"))
 }
 
-async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
+async fn request_service_access(args: &RequestServiceAccessArgs) -> Result<()> {
     let (mut socket, _) = connect_async(args.relay.trim())
         .await
         .with_context(|| format!("connect relay {}", args.relay.trim()))?;
@@ -110,9 +114,9 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
     ]))?;
     socket.send(Message::Text(req_frame)).await?;
 
-    let request_id = format!("gw-launch-{}", random_suffix());
-    let payload = json!({
-        "type": "gateway_managed_launch_request",
+    let request_id = format!("gw-service-access-{}", random_suffix());
+    let issued_at = now_ms();
+    let request_claims = json!({
         "requestId": request_id,
         "toDevicePk": args.gateway_pk,
         "identityId": args.identity_id,
@@ -125,8 +129,24 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
             "shell": "constitute",
             "surface": args.app_repo,
         },
-        "ts": now_ms(),
-        "ttl": 120,
+        "ts": issued_at,
+        "ttl": 90,
+    });
+    let request_envelope = seal_envelope(
+        CAAC_KIND_SERVICE_ACCESS_REQUEST,
+        &request_claims,
+        &args.sk,
+        &[args.gateway_pk.clone()],
+        issued_at,
+        issued_at + 90_000,
+    )?;
+    let payload = json!({
+        "type": "gateway_service_access_request",
+        "requestId": request_id,
+        "toDevicePk": args.gateway_pk,
+        "requestEnvelope": request_envelope,
+        "ts": issued_at,
+        "ttl": 90,
     });
     let unsigned = nostr::build_unsigned_event(
         &args.pk,
@@ -147,10 +167,10 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
     tokio::pin!(timeout);
     loop {
         tokio::select! {
-            _ = &mut timeout => return Err(anyhow!("timed out waiting for gateway_managed_launch_status")),
+            _ = &mut timeout => return Err(anyhow!("timed out waiting for gateway_service_access_status")),
             next = socket.next() => {
                 let Some(next) = next else {
-                    return Err(anyhow!("relay closed before launch status arrived"));
+                    return Err(anyhow!("relay closed before service access status arrived"));
                 };
                 let message = next?;
                 let Message::Text(text) = message else { continue };
@@ -162,15 +182,23 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
                 let Some(event_value) = frame.get(1) else { continue };
                 let Ok(event) = serde_json::from_value::<NostrEvent>(event_value.clone()) else { continue };
                 let Ok(content) = serde_json::from_str::<Value>(&event.content) else { continue };
-                if content.get("type").and_then(Value::as_str) != Some("gateway_managed_launch_status") {
+                if content.get("type").and_then(Value::as_str) != Some("gateway_service_access_status") {
                     continue;
                 }
-                if content.get("requestId").and_then(Value::as_str) != Some(request_id.as_str()) {
+                let Some(envelope_value) = content.get("statusEnvelope") else {
+                    continue;
+                };
+                let Ok(envelope) = serde_json::from_value::<CaacEnvelope>(envelope_value.clone()) else { continue };
+                if envelope.kind != CAAC_KIND_SERVICE_ACCESS_STATUS {
                     continue;
                 }
-                let launch_id = format!("launch-{}", random_suffix());
-                let launch_context = json!({
-                    "launchId": launch_id,
+                let Ok(status) = open_envelope(&envelope, &args.sk, now_ms(), None) else { continue };
+                if status.get("requestId").and_then(Value::as_str) != Some(request_id.as_str()) {
+                    continue;
+                }
+                let service_access_id = format!("service-access-{}", random_suffix());
+                let service_access_context = json!({
+                    "contextId": service_access_id,
                     "app": "constitute-nvr-ui",
                     "repo": args.app_repo,
                     "identityId": args.identity_id,
@@ -178,15 +206,15 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
                     "gatewayPk": args.gateway_pk,
                     "servicePk": args.service_pk,
                     "service": args.service,
-                    "launchToken": content.get("launchToken").cloned().unwrap_or(Value::String(String::new())),
-                    "display": content.get("display").cloned().unwrap_or(Value::Null),
+                    "serviceCapability": status.get("serviceCapability").cloned().unwrap_or(Value::String(String::new())),
+                    "display": status.get("display").cloned().unwrap_or(Value::Null),
                     "createdAt": now_ms(),
-                    "expiresAt": content.get("expiresAt").cloned().unwrap_or(Value::from(now_ms() + 60_000)),
+                    "expiresAt": status.get("expiresAt").cloned().unwrap_or(Value::from(now_ms() + 60_000)),
                 });
                 let output = json!({
                     "requestId": request_id,
-                    "status": content,
-                    "launchContext": launch_context,
+                    "status": status,
+                    "serviceAccessContext": service_access_context,
                 });
                 println!("{}", serde_json::to_string_pretty(&output)?);
                 return Ok(());
@@ -195,7 +223,7 @@ async fn request_launch(args: &RequestLaunchArgs) -> Result<()> {
     }
 }
 
-struct RequestLaunchArgs {
+struct RequestServiceAccessArgs {
     relay: String,
     sk: String,
     pk: String,
@@ -217,7 +245,7 @@ async fn main() -> Result<()> {
             partial,
             expected_pk,
         } => recover_sk(&partial, &expected_pk).await,
-        Command::RequestLaunch {
+        Command::RequestServiceAccess {
             relay,
             sk,
             pk,
@@ -230,7 +258,7 @@ async fn main() -> Result<()> {
             capability,
             app_repo,
         } => {
-            let args = RequestLaunchArgs {
+            let args = RequestServiceAccessArgs {
                 relay,
                 sk,
                 pk,
@@ -243,7 +271,7 @@ async fn main() -> Result<()> {
                 capability,
                 app_repo,
             };
-            request_launch(&args).await
+            request_service_access(&args).await
         }
     }
 }

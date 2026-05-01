@@ -1,4 +1,9 @@
 use super::*;
+use constitute_protocol::{
+    open_envelope, seal_envelope, CaacEnvelope, ServiceAccessCapabilityClaims,
+    CAAC_KIND_SERVICE_ACCESS_INVOCATION, CAAC_KIND_SERVICE_ACCESS_REQUEST,
+    CAAC_KIND_SERVICE_ACCESS_SIGNAL, DEFAULT_REQUEST_TTL_SECONDS,
+};
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -61,35 +66,9 @@ pub(super) struct HostedNvrService {
     pub config: HostedNvrConfig,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ManagedLaunchTokenPayload {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(rename = "gatewayPk")]
-    gateway_pk: String,
-    #[serde(rename = "servicePk")]
-    service_pk: String,
-    service: String,
-    #[serde(rename = "identityId")]
-    identity_id: String,
-    #[serde(rename = "devicePk")]
-    device_pk: String,
-    capability: String,
-    #[serde(default)]
-    owner: bool,
-    #[serde(rename = "viewSources", default)]
-    view_sources: Vec<String>,
-    #[serde(rename = "controlSources", default)]
-    control_sources: Vec<String>,
-    #[serde(rename = "launchNonce")]
-    launch_nonce: String,
-    #[serde(rename = "issuedAt")]
-    issued_at: u64,
-    #[serde(rename = "expiresAt")]
-    expires_at: u64,
-}
+type ServiceAccessTokenPayload = ServiceAccessCapabilityClaims;
 
-fn normalize_gateway_managed_launch_request(req: &mut GatewayManagedLaunchRequest) {
+fn normalize_gateway_service_access_request(req: &mut GatewayServiceAccessRequest) {
     req.request_id = trim_nonempty(&req.request_id);
     if req.request_id.is_empty() {
         req.request_id = make_install_request_id();
@@ -100,7 +79,7 @@ fn normalize_gateway_managed_launch_request(req: &mut GatewayManagedLaunchReques
     req.service_pk = trim_nonempty(&req.service_pk);
     req.service = trim_nonempty(&req.service).to_ascii_lowercase();
     req.capability = trim_nonempty(&req.capability).to_ascii_lowercase();
-    req.launch_nonce = trim_nonempty(&req.launch_nonce);
+    req.access_nonce = trim_nonempty(&req.access_nonce);
     req.zone = trim_nonempty(&req.zone);
     req.app_repo = trim_nonempty(&req.app_repo);
 }
@@ -116,7 +95,7 @@ fn normalize_gateway_signal_request(req: &mut GatewaySignalRequest) {
     req.service_pk = trim_nonempty(&req.service_pk);
     req.service = trim_nonempty(&req.service).to_ascii_lowercase();
     req.signal_type = trim_nonempty(&req.signal_type).to_ascii_lowercase();
-    req.launch_token = trim_nonempty(&req.launch_token);
+    req.service_capability = trim_nonempty(&req.service_capability);
 }
 
 pub(super) fn gateway_offer_candidates(payload: &Value) -> Value {
@@ -497,39 +476,71 @@ async fn is_requester_authorized_for_service_install(
     }
 }
 
-fn build_managed_launch_token(
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &ManagedLaunchTokenPayload,
+fn build_service_access_capability(
+    gateway_sk_hex: &str,
+    payload: &ServiceAccessTokenPayload,
 ) -> Result<String> {
-    let tags = vec![
-        vec!["t".to_string(), "constitute".to_string()],
-        vec!["type".to_string(), "managed_launch_token".to_string()],
-        vec!["service".to_string(), payload.service.clone()],
-        vec!["p".to_string(), payload.device_pk.clone()],
-        vec!["p".to_string(), payload.service_pk.clone()],
-    ];
-    let unsigned = nostr::build_unsigned_event(
-        pubkey,
-        27235,
-        tags,
-        serde_json::to_string(payload)?,
-        util::now_unix_seconds(),
-    );
-    let ev = nostr::sign_event(&unsigned, sk_hex)?;
-    Ok(serde_json::to_string(&ev)?)
+    let claims = serde_json::to_value(payload)?;
+    let recipients = vec![payload.gateway_pk.clone(), payload.service_pk.clone()];
+    let envelope = seal_envelope(
+        constitute_protocol::CAAC_KIND_SERVICE_ACCESS_CAPABILITY,
+        &claims,
+        gateway_sk_hex,
+        &recipients,
+        payload.issued_at,
+        payload.expires_at,
+    )?;
+    Ok(serde_json::to_string(&envelope)?)
 }
 
-fn parse_managed_launch_token(
-    token: &str,
-) -> Result<(nostr::NostrEvent, ManagedLaunchTokenPayload)> {
-    let ev: nostr::NostrEvent = serde_json::from_str(token).context("invalid launch token json")?;
-    if !nostr::verify_event(&ev)? {
-        return Err(anyhow!("invalid launch token signature"));
-    }
-    let payload: ManagedLaunchTokenPayload =
-        serde_json::from_str(&ev.content).context("invalid launch token payload")?;
-    Ok((ev, payload))
+fn parse_service_access_capability(
+    capability: &str,
+    recipient_sk: &str,
+    now_ms: u64,
+) -> Result<(CaacEnvelope, ServiceAccessTokenPayload)> {
+    let envelope: CaacEnvelope =
+        serde_json::from_str(capability).context("invalid service capability envelope json")?;
+    let claims = open_envelope(&envelope, recipient_sk, now_ms, None)?;
+    let payload: ServiceAccessTokenPayload =
+        serde_json::from_value(claims).context("invalid service capability claims")?;
+    Ok((envelope, payload))
+}
+
+async fn publish_service_access_status_for_request(
+    ctx: &InboundContext,
+    req: &GatewayServiceAccessRequest,
+    status: &str,
+    service_capability: Option<String>,
+    expires_at: Option<u64>,
+    display: Option<Value>,
+    reason: Option<String>,
+    detail: Option<String>,
+) {
+    let payload = match build_gateway_service_access_status_payload(
+        req,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        status,
+        service_capability,
+        expires_at,
+        display,
+        reason,
+        detail,
+    ) {
+        Ok(payload) => payload,
+        Err(err) => {
+            warn!(error = %err, "failed to seal service access status");
+            return;
+        }
+    };
+    let _ = publish_gateway_service_access_status(
+        &ctx.relay_pool,
+        &ctx.local_relay,
+        &ctx.self_pk,
+        &ctx.self_sk,
+        &payload,
+    )
+    .await;
 }
 
 async fn publish_gateway_service_install_status(
@@ -574,23 +585,21 @@ async fn publish_gateway_zone_sync_status(
     Ok(())
 }
 
-async fn publish_gateway_managed_launch_status(
+async fn publish_gateway_service_access_status(
     relay_pool: &relay::RelayPool,
     local_relay: &Option<local_relay::LocalRelayHandle>,
     pubkey: &str,
     sk_hex: &str,
-    payload: &GatewayManagedLaunchStatusPayload,
+    payload: &GatewayServiceAccessStatusPayload,
 ) -> Result<()> {
     if pubkey.is_empty() || sk_hex.is_empty() {
         return Ok(());
     }
-    warn!(
-        request_id = %payload.request_id,
-        status = %payload.status,
+    debug!(
         gateway_pk = %payload.gateway_pk,
-        device_pk = %payload.device_pk,
-        service_pk = %payload.service_pk,
-        "publishing managed launch status"
+        to_device_pk = %payload.to_device_pk,
+        envelope_id = %payload.status_envelope.envelope_id,
+        "publishing sealed service access status"
     );
     let value = serde_json::to_value(payload)?;
     let ev = build_app_event(pubkey, sk_hex, &value)?;
@@ -613,6 +622,12 @@ async fn publish_gateway_signal_status(
     if pubkey.is_empty() || sk_hex.is_empty() {
         return Ok(());
     }
+    debug!(
+        gateway_pk = %payload.gateway_pk,
+        to_device_pk = %payload.to_device_pk,
+        envelope_id = %payload.status_envelope.envelope_id,
+        "publishing sealed service signal status"
+    );
     let value = serde_json::to_value(payload)?;
     let ev = build_app_event(pubkey, sk_hex, &value)?;
     relay_pool.broadcast(&nostr::frame_event(&ev));
@@ -647,7 +662,7 @@ async fn publish_gateway_signal(
 
 fn build_managed_service_display(
     hosted: &HostedNvrService,
-    req: &GatewayManagedLaunchRequest,
+    req: &GatewayServiceAccessRequest,
     scope: &grants::GrantScope,
     stun_servers: &[String],
     turn_servers: &[String],
@@ -807,32 +822,33 @@ pub(super) async fn load_target_hosted_service(
     Ok(hosted)
 }
 
-fn validate_managed_launch_token_for_request(
+fn validate_service_access_capability_for_request(
     ctx: &InboundContext,
     req: &GatewaySignalRequest,
-) -> Result<ManagedLaunchTokenPayload> {
-    let (event, token) = parse_managed_launch_token(&req.launch_token)?;
-    if event.pubkey.trim() != ctx.self_pk.trim() {
-        return Err(anyhow!("launch token not signed by this gateway"));
-    }
+) -> Result<ServiceAccessTokenPayload> {
     let now_ms = util::now_unix_seconds() * 1000;
+    let (envelope, token) =
+        parse_service_access_capability(&req.service_capability, &ctx.self_sk, now_ms)?;
+    if envelope.issuer_pk.trim() != ctx.self_pk.trim() {
+        return Err(anyhow!("service capability not issued by this gateway"));
+    }
     if token.expires_at < now_ms {
-        return Err(anyhow!("launch token expired"));
+        return Err(anyhow!("service capability expired"));
     }
     if token.gateway_pk.trim() != ctx.self_pk.trim() {
-        return Err(anyhow!("launch token gateway mismatch"));
+        return Err(anyhow!("service capability gateway mismatch"));
     }
     if token.identity_id.trim() != req.identity_id.trim() {
-        return Err(anyhow!("launch token identity mismatch"));
+        return Err(anyhow!("service capability identity mismatch"));
     }
     if token.device_pk.trim() != req.device_pk.trim() {
-        return Err(anyhow!("launch token device mismatch"));
+        return Err(anyhow!("service capability device mismatch"));
     }
     if token.service_pk.trim() != req.service_pk.trim() {
-        return Err(anyhow!("launch token service mismatch"));
+        return Err(anyhow!("service capability service mismatch"));
     }
     if token.service.trim() != req.service.trim() {
-        return Err(anyhow!("launch token service slug mismatch"));
+        return Err(anyhow!("service capability service slug mismatch"));
     }
     Ok(token)
 }
@@ -1375,19 +1391,53 @@ pub(super) async fn handle_gateway_zone_sync_request(
     }
 }
 
-pub(super) async fn handle_gateway_managed_launch_request(
+pub(super) async fn handle_gateway_service_access_request(
     ctx: &InboundContext,
     nostr_ev: &nostr::NostrEvent,
     payload: &Value,
 ) {
-    let mut req: GatewayManagedLaunchRequest = match serde_json::from_value(payload.clone()) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "invalid gateway_managed_launch_request payload");
+    let request_envelope: CaacEnvelope = match payload
+        .get("requestEnvelope")
+        .cloned()
+        .map(serde_json::from_value)
+    {
+        Some(Ok(envelope)) => envelope,
+        Some(Err(err)) => {
+            warn!(error = %err, "invalid service access request envelope");
+            return;
+        }
+        None => {
+            warn!("rejecting service access request without CAAC envelope");
             return;
         }
     };
-    normalize_gateway_managed_launch_request(&mut req);
+    if request_envelope.kind != CAAC_KIND_SERVICE_ACCESS_REQUEST {
+        warn!(kind = %request_envelope.kind, "rejecting unexpected service access envelope kind");
+        return;
+    }
+    if request_envelope.issuer_pk.trim() != nostr_ev.pubkey.trim() {
+        warn!("rejecting service access request with event/envelope issuer mismatch");
+        return;
+    }
+    let now_ms = util::now_unix_seconds() * 1000;
+    let claims = {
+        let mut replay = ctx.caac_replay.lock().await;
+        match open_envelope(&request_envelope, &ctx.self_sk, now_ms, Some(&mut *replay)) {
+            Ok(claims) => claims,
+            Err(err) => {
+                warn!(error = %err, "service access request envelope rejected");
+                return;
+            }
+        }
+    };
+    let mut req: GatewayServiceAccessRequest = match serde_json::from_value(claims) {
+        Ok(req) => req,
+        Err(err) => {
+            warn!(error = %err, "invalid gateway_service_access_request claims");
+            return;
+        }
+    };
+    normalize_gateway_service_access_request(&mut req);
 
     if req.to_device_pk != ctx.self_pk {
         return;
@@ -1408,50 +1458,23 @@ pub(super) async fn handle_gateway_managed_launch_request(
         req.device_pk = requester_pk.clone();
     }
 
-    warn!(
+    debug!(
         request_id = %req.request_id,
         requester_pk = %requester_pk,
         target_gateway_pk = %req.to_device_pk,
-        device_pk = %req.device_pk,
-        service_pk = %req.service_pk,
-        service = %req.service,
-        capability = %req.capability,
-        "received managed launch request"
+        "received sealed service access request"
     );
 
-    let publish_status = |status: &str,
-                          launch_token: Option<String>,
-                          expires_at: Option<u64>,
-                          display: Option<Value>,
-                          reason: Option<String>,
-                          detail: Option<String>| {
-        build_gateway_managed_launch_status_payload(
-            &req,
-            &ctx.self_pk,
-            status,
-            launch_token,
-            expires_at,
-            display,
-            reason,
-            detail,
-        )
-    };
-
     if requester_pk != req.device_pk {
-        let status = publish_status(
+        publish_service_access_status_for_request(
+            ctx,
+            &req,
             "rejected",
             None,
             None,
             None,
             Some("requester_device_mismatch".to_string()),
             Some("requesting event pubkey does not match devicePk".to_string()),
-        );
-        let _ = publish_gateway_managed_launch_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
         )
         .await;
         return;
@@ -1460,20 +1483,15 @@ pub(super) async fn handle_gateway_managed_launch_request(
     let hosted = match load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
         Ok(service) => service,
         Err(err) => {
-            let status = publish_status(
+            publish_service_access_status_for_request(
+                ctx,
+                &req,
                 "failed",
                 None,
                 None,
                 None,
                 Some("service_unavailable".to_string()),
                 Some(err.to_string()),
-            );
-            let _ = publish_gateway_managed_launch_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
             )
             .await;
             return;
@@ -1494,67 +1512,56 @@ pub(super) async fn handle_gateway_managed_launch_request(
         Ok(scope) => scope,
         Err(err) => {
             let detail = err.to_string();
-            let status = publish_status(
+            publish_service_access_status_for_request(
+                ctx,
+                &req,
                 "rejected",
                 None,
                 None,
                 None,
-                Some("launch_not_granted".to_string()),
+                Some("service_access_not_granted".to_string()),
                 Some(detail),
-            );
-            let _ = publish_gateway_managed_launch_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
             )
             .await;
             return;
         }
     };
 
-    let mut launch_req = req.clone();
-    launch_req.service_pk = hosted.record.device_pk.clone();
-    if launch_req.launch_nonce.is_empty() {
-        launch_req.launch_nonce = random_hex(8);
+    let mut service_access_req = req.clone();
+    service_access_req.service_pk = hosted.record.device_pk.clone();
+    if service_access_req.access_nonce.is_empty() {
+        service_access_req.access_nonce = random_hex(8);
     }
 
     let issued_at = util::now_unix_seconds() * 1000;
     let expires_at = issued_at + 120_000;
-    let token_payload = ManagedLaunchTokenPayload {
-        kind: "managed_launch_token".to_string(),
+    let token_payload = ServiceAccessTokenPayload {
+        capability_id: format!("cap-{}", random_hex(8)),
         gateway_pk: ctx.self_pk.clone(),
-        service_pk: launch_req.service_pk.clone(),
-        service: launch_req.service.clone(),
-        identity_id: launch_req.identity_id.clone(),
-        device_pk: launch_req.device_pk.clone(),
-        capability: launch_req.capability.clone(),
+        service_pk: service_access_req.service_pk.clone(),
+        service: service_access_req.service.clone(),
+        identity_id: service_access_req.identity_id.clone(),
+        device_pk: service_access_req.device_pk.clone(),
+        capability: service_access_req.capability.clone(),
         owner: scope.owner,
         view_sources: scope.view_sources.clone(),
         control_sources: scope.control_sources.clone(),
-        launch_nonce: launch_req.launch_nonce.clone(),
+        nonce: service_access_req.access_nonce.clone(),
         issued_at,
         expires_at,
     };
-    let launch_token = match build_managed_launch_token(&ctx.self_pk, &ctx.self_sk, &token_payload)
-    {
+    let service_capability = match build_service_access_capability(&ctx.self_sk, &token_payload) {
         Ok(token) => token,
         Err(err) => {
-            let status = publish_status(
+            publish_service_access_status_for_request(
+                ctx,
+                &req,
                 "failed",
                 None,
                 None,
                 None,
                 Some("token_build_failed".to_string()),
                 Some(err.to_string()),
-            );
-            let _ = publish_gateway_managed_launch_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
             )
             .await;
             return;
@@ -1563,27 +1570,20 @@ pub(super) async fn handle_gateway_managed_launch_request(
 
     let display = build_managed_service_display(
         &hosted,
-        &launch_req,
+        &service_access_req,
         &scope,
         &ctx.stun_servers,
         &ctx.turn_servers,
     );
-    let status = build_gateway_managed_launch_status_payload(
-        &launch_req,
-        &ctx.self_pk,
+    publish_service_access_status_for_request(
+        ctx,
+        &service_access_req,
         "complete",
-        Some(launch_token),
+        Some(service_capability),
         Some(expires_at),
         Some(display),
         None,
         None,
-    );
-    let _ = publish_gateway_managed_launch_status(
-        &ctx.relay_pool,
-        &ctx.local_relay,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        &status,
     )
     .await;
 }
@@ -1593,10 +1593,44 @@ pub(super) async fn handle_gateway_signal_request(
     nostr_ev: &nostr::NostrEvent,
     payload: &Value,
 ) {
-    let mut req: GatewaySignalRequest = match serde_json::from_value(payload.clone()) {
+    let request_envelope: CaacEnvelope = match payload
+        .get("requestEnvelope")
+        .cloned()
+        .map(serde_json::from_value)
+    {
+        Some(Ok(envelope)) => envelope,
+        Some(Err(err)) => {
+            warn!(error = %err, "invalid service signal request envelope");
+            return;
+        }
+        None => {
+            warn!("rejecting service signal request without CAAC envelope");
+            return;
+        }
+    };
+    if request_envelope.kind != CAAC_KIND_SERVICE_ACCESS_SIGNAL {
+        warn!(kind = %request_envelope.kind, "rejecting unexpected service signal envelope kind");
+        return;
+    }
+    if request_envelope.issuer_pk.trim() != nostr_ev.pubkey.trim() {
+        warn!("rejecting service signal request with event/envelope issuer mismatch");
+        return;
+    }
+    let now_ms = util::now_unix_seconds() * 1000;
+    let claims = {
+        let mut replay = ctx.caac_replay.lock().await;
+        match open_envelope(&request_envelope, &ctx.self_sk, now_ms, Some(&mut *replay)) {
+            Ok(claims) => claims,
+            Err(err) => {
+                warn!(error = %err, "service signal request envelope rejected");
+                return;
+            }
+        }
+    };
+    let mut req: GatewaySignalRequest = match serde_json::from_value(claims) {
         Ok(req) => req,
         Err(err) => {
-            warn!(error = %err, "invalid gateway_signal_request payload");
+            warn!(error = %err, "invalid gateway_service_signal_request claims");
             return;
         }
     };
@@ -1614,19 +1648,23 @@ pub(super) async fn handle_gateway_signal_request(
         req.device_pk = requester_pk.clone();
     }
 
-    warn!(
+    debug!(
         request_id = %req.request_id,
         requester_pk = %requester_pk,
         target_gateway_pk = %req.to_device_pk,
-        device_pk = %req.device_pk,
-        service_pk = %req.service_pk,
-        service = %req.service,
         signal_type = %req.signal_type,
-        "received gateway signal request"
+        "received sealed gateway service signal request"
     );
 
     let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
-        build_gateway_signal_status_payload(&req, &ctx.self_pk, status, reason, detail)
+        build_gateway_signal_status_payload(
+            &req,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            status,
+            reason,
+            detail,
+        )
     };
 
     if requester_pk != req.device_pk {
@@ -1646,12 +1684,12 @@ pub(super) async fn handle_gateway_signal_request(
         return;
     }
 
-    let token = match validate_managed_launch_token_for_request(ctx, &req) {
+    let token = match validate_service_access_capability_for_request(ctx, &req) {
         Ok(token) => token,
         Err(err) => {
             let status = publish_status(
                 "rejected",
-                Some("invalid_launch_token".to_string()),
+                Some("invalid_service_capability".to_string()),
                 Some(err.to_string()),
             );
             let _ = publish_gateway_signal_status(
@@ -1715,10 +1753,10 @@ pub(super) async fn handle_gateway_signal_request(
     .await;
 
     let url = match req.signal_type.as_str() {
-        "offer" => format!("{}/managed/offer", hosted.api_base_url),
-        "control" => format!("{}/managed/control", hosted.api_base_url),
-        "admin" => format!("{}/managed/admin", hosted.api_base_url),
-        "session_close" => format!("{}/managed/close", hosted.api_base_url),
+        "offer" => format!("{}/service-access/offer", hosted.api_base_url),
+        "control" => format!("{}/service-access/control", hosted.api_base_url),
+        "admin" => format!("{}/service-access/admin", hosted.api_base_url),
+        "session_close" => format!("{}/service-access/close", hosted.api_base_url),
         _ => {
             let status = publish_status(
                 "rejected",
@@ -1742,7 +1780,7 @@ pub(super) async fn handle_gateway_signal_request(
         let status = publish_status(
             "rejected",
             Some("admin_requires_owner".to_string()),
-            Some("owner launch is required for camera administration".to_string()),
+            Some("owner service access is required for camera administration".to_string()),
         );
         let _ = publish_gateway_signal_status(
             &ctx.relay_pool,
@@ -1798,7 +1836,7 @@ pub(super) async fn handle_gateway_signal_request(
             }
             let offer_candidates = gateway_offer_candidates(&forwarded_offer);
             json!({
-                "launchToken": req.launch_token.clone(),
+                "serviceCapability": req.service_capability.clone(),
                 "offer": forwarded_offer,
                 "candidates": offer_candidates,
                 "iceServers": {
@@ -1863,7 +1901,7 @@ pub(super) async fn handle_gateway_signal_request(
             };
             lease_acquired = true;
             json!({
-                "launchToken": req.launch_token.clone(),
+                "serviceCapability": req.service_capability.clone(),
                 "payload": req.payload.clone(),
                 "controlLease": lease.lease,
                 "preempted": lease.preempted,
@@ -1883,16 +1921,61 @@ pub(super) async fn handle_gateway_signal_request(
                 .cloned()
                 .unwrap_or_else(|| json!({}));
             json!({
-                "launchToken": req.launch_token.clone(),
+                "serviceCapability": req.service_capability.clone(),
                 "action": action,
                 "payload": payload,
             })
         }
         _ => json!({
-            "launchToken": req.launch_token.clone(),
+            "serviceCapability": req.service_capability.clone(),
             "payload": req.payload.clone(),
         }),
     };
+
+    let mut invocation_claims = request_body;
+    if let Some(map) = invocation_claims.as_object_mut() {
+        map.insert("requestId".to_string(), json!(req.request_id.clone()));
+        map.insert("signalType".to_string(), json!(req.signal_type.clone()));
+        map.insert("gatewayPk".to_string(), json!(ctx.self_pk.clone()));
+        map.insert("identityId".to_string(), json!(req.identity_id.clone()));
+        map.insert("devicePk".to_string(), json!(req.device_pk.clone()));
+        map.insert(
+            "servicePk".to_string(),
+            json!(hosted.record.device_pk.clone()),
+        );
+        map.insert("service".to_string(), json!(hosted.record.service.clone()));
+    }
+    let issued_at = util::now_unix_seconds() * 1000;
+    let invocation_envelope = match seal_envelope(
+        CAAC_KIND_SERVICE_ACCESS_INVOCATION,
+        &invocation_claims,
+        &ctx.self_sk,
+        std::slice::from_ref(&hosted.record.device_pk),
+        issued_at,
+        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
+    ) {
+        Ok(envelope) => envelope,
+        Err(err) => {
+            warn!(request_id = %req.request_id, error = %err, "failed to seal service invocation");
+            let status = publish_status(
+                "failed",
+                Some("service_invocation_seal_failed".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+    };
+    let request_body = json!({
+        "serviceRequestEnvelope": invocation_envelope,
+    });
 
     let request_timeout = match req.signal_type.as_str() {
         // PTZ control can legitimately take longer now that Reolink control may degrade through
@@ -2046,10 +2129,13 @@ pub(super) async fn handle_gateway_signal_request(
                 .or_else(|| body.get("answer").cloned())
                 .unwrap_or_else(|| json!({}))
         };
-        let signal = GatewaySignalPayload {
-            signal_type,
-            ..build_gateway_signal_payload(&req, &ctx.self_pk, payload_value)
-        };
+        let signal = build_gateway_signal_payload(
+            &req,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &signal_type,
+            payload_value,
+        );
         let _ = publish_gateway_signal(
             &ctx.relay_pool,
             &ctx.local_relay,

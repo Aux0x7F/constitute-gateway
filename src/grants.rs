@@ -438,7 +438,7 @@ pub(super) async fn resolve_scope_for_request(
 ) -> Result<GrantScope> {
     if !matches!(
         (service.trim(), capability.trim()),
-        ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.launch_managed_app")
+        ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.service_access")
     ) {
         return Err(anyhow!("unsupported capability"));
     }

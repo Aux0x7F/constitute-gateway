@@ -18,7 +18,7 @@ The active contract slice aligns with:
 Required convergence points:
 - service-backed device publication
 - hosted service inventory and freshness
-- launch authorization for managed app surfaces
+- service access authorization for managed app surfaces
 - gateway-mediated WebRTC signaling
 - zone and identity durability semantics
 
@@ -29,7 +29,7 @@ Required convergence points:
 4. Swarm record storage for identity/device/DHT records
 5. UDP + QUIC handshake and request forwarding across native peers
 6. Hosted-service inventory publication
-7. Managed launch authorization and signaling brokerage
+7. Service access authorization and signaling brokerage
 
 ## Identity and Key Management
 - On first run, gateway generates a Nostr keypair and persists it.
@@ -83,28 +83,28 @@ For each hosted service the gateway should be able to publish:
 - `hostGatewayPk`
 - version
 - freshness / last-seen
-- launch availability / managed status
+- service access availability / managed status
 
 Gateway owns:
 - install/update/control requests
-- launch authorization
+- service access authorization
 - signaling brokerage
 - service inventory
 
 Gateway does not need to be the long-term UI container for those services.
 
-## Managed Launch Model
+## Service Access Model
 Canonical flow:
 1. browser shell selects an owned gateway
-2. browser shell requests managed launch for a hosted service
+2. browser shell requests service access for a hosted service
 3. gateway validates identity membership, device authorization, and capability
-4. gateway issues short-lived launch authorization
+4. gateway issues short-lived service access authorization
 5. browser app surface uses gateway-mediated signaling to establish WebRTC with the hosted service
 6. hosted service validates the gateway-issued authorization before admitting the session
 
 Direct app entry is primary. The gateway may participate after the app has attached to account/runtime authority; the user should not need to visit account manually before using a first-party app.
 
-Current launch authorization is a transitional short-lived capability. The target direction is explicit cryptographic service capability state bound to identity, device, gateway, service, scope, expiry, nonce/replay protection, and encrypted session material where confidentiality is required.
+Current service access authorization uses `constitute-protocol` CAAC envelopes for gateway-issued service capabilities. Browser-to-gateway service access and service signal requests are sealed to the gateway. Gateway-to-browser service access status, service signal status, and service signal payloads are sealed back to the requesting device. The capability is bound to identity, device, gateway, service, scope, expiry, and nonce/replay protection. Sensitive capability claims are encrypted to the gateway and target service; browser surfaces carry the capability opaquely.
 
 ## WebRTC Direction
 Gateway is the signaling/control boundary for browser-safe direct paths:
@@ -140,10 +140,10 @@ Current guarantees:
 - record validation before acceptance
 
 Active sprint direction:
-- short-lived launch authorization
-- capability-enforced managed service launch
+- CAAC-backed short-lived service access authorization
+- capability-enforced managed service access
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
-- explicit signed-versus-encrypted audit for launch, signaling, and session metadata
+- explicit signed-versus-encrypted audit for service access, signaling, and session metadata
 
 ## Planned Host-Capability Direction
 

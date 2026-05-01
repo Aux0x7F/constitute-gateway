@@ -4,7 +4,7 @@ This document defines the protocol contract for `constitute-gateway` and the exp
 
 ## Contract Status
 - Status: `active`
-- Scope: gateway runtime, browser<->gateway app channel, managed service launch/signaling, gateway<->gateway transport
+- Scope: gateway runtime, browser<->gateway app channel, managed service access/signaling, gateway<->gateway transport
 - Browser-facing repos currently include `constitute-account`, `constitute-gateway-ui`, and `constitute-nvr-ui`.
 - Change rule: this pre-prod contract may break only when the active project contract moves all affected repos together.
 
@@ -16,8 +16,7 @@ This document defines the protocol contract for `constitute-gateway` and the exp
 - `deviceKind`: `user` or `service`
 - `service`: service slug for service-backed devices
 - `hostGatewayPk`: gateway device public key that hosts a service-backed device
-- `launchToken`: short-lived gateway-issued authorization for managed app launch/session setup
-- `serviceCapability`: planned explicit cryptographic service-access capability that may supersede launch-token-only admission semantics
+- `serviceCapability`: opaque CAAC-sealed gateway-issued authorization for managed app service access/session setup
 
 ## Node Roles
 The role vocabulary is shared across discovery and presence payloads:
@@ -159,33 +158,32 @@ Gateway status events:
 - status lifecycle: `accepted` -> `started` -> (`complete` | `failed` | `rejected`)
 - includes `requestId`, `gatewayPk`, `toDevicePk`, `identityId`, `service`, `action`, optional `reason`/`detail`
 
-### Request: Managed Service Launch
+### Request: Managed Service Access
 Incoming type:
-- `gateway_managed_launch_request`
+- `gateway_service_access_request`
 
-Required fields:
-- `requestId`
+Relay-visible fields:
 - `toDevicePk` (must match gateway `devicePk`)
+- `requestEnvelope`
+
+Encrypted request-envelope claims:
+- `requestId`
 - `identityId`
 - `devicePk` (requesting paired browser device)
 - `servicePk` (target hosted service-backed device)
 - `service`
 - `capability` (for example `nvr.view` or `nvr.manage`)
-- `launchNonce`
-
-Optional fields:
-- `zone`
-- `appRepo`
-- `display`
+- `accessNonce`
+- optional `zone`, `appRepo`, and `display`
 
 Gateway responses:
-- `gateway_managed_launch_status`
-- lifecycle: `accepted` -> (`complete` | `failed` | `rejected`)
-- `complete` includes:
+- `gateway_service_access_status`
+- relay-visible fields are limited to `toDevicePk`, `gatewayPk`, `statusEnvelope`, and timestamp
+- encrypted status-envelope claims include lifecycle status and, on `complete`:
   - `gatewayPk`
   - `servicePk`
   - `service`
-  - `launchToken`
+  - `serviceCapability`
   - `expiresAt`
   - optional `display`
 
@@ -193,28 +191,27 @@ Validation rules:
 - requesting device must belong to the same identity as the gateway runtime
 - target service must be owned/hosted by the gateway
 - requesting device must hold the requested capability
-- launch token must be short-lived and service-scoped
-
-Planned convergence direction:
-- the launch token is a transitional short-lived bearer-style capability
-- future service access should be represented as an explicit cryptographic capability bound to identity, requesting device, gateway, service, scope, expiry, and nonce/replay protection
-- sensitive session material must be encrypted to intended principals/devices, not merely signed
+- service capability must be short-lived, CAAC-sealed, and service-scoped
+- service access request and status metadata must be encrypted to intended principals/devices, not merely signed
 - direct first-party app entry should be able to resolve valid retained account/runtime capability state without requiring a manual account-app visit first
 
 ### Request: Managed Service Signaling
 Incoming type:
-- `gateway_signal_request`
+- `gateway_service_signal_request`
 
-Required fields:
-- `requestId`
+Relay-visible fields:
 - `toDevicePk` (must match gateway `devicePk`)
+- `requestEnvelope`
+
+Encrypted request-envelope claims:
+- `requestId`
 - `identityId`
 - `devicePk` (requesting browser device)
 - `servicePk`
 - `service`
 - `signalType`
 - `payload`
-- `launchToken`
+- `serviceCapability`
 
 Current `signalType` values:
 - `offer`
@@ -224,12 +221,14 @@ Current `signalType` values:
 - `session_close`
 
 Gateway responses:
-- `gateway_signal_status`
+- `gateway_service_signal_status`
 - lifecycle: `accepted` -> (`complete` | `failed` | `rejected`)
+- relay-visible fields are limited to `toDevicePk`, `gatewayPk`, `statusEnvelope`, and timestamp
 
 Gateway forwarding events:
-- `gateway_signal`
-- delivered to the target hosted service or requesting browser path with:
+- `gateway_service_signal`
+- relay-visible fields are limited to `toDevicePk`, `gatewayPk`, `signalEnvelope`, and timestamp
+- encrypted signal-envelope claims are delivered to the requesting browser path with:
   - `gatewayPk`
   - `servicePk`
   - `service`
@@ -237,9 +236,9 @@ Gateway forwarding events:
   - `payload`
 
 Validation rules:
-- launch token must still be valid
+- service capability must still be valid
 - token must bind the requesting device, target gateway, and target service
-- gateway may reject signaling that is not associated with an active launch/session
+- gateway may reject signaling that is not associated with an active service access/session
 
 ### Request: Gateway Zone Sync
 Incoming type:
@@ -309,7 +308,7 @@ Runtime behavior:
 - WebRTC media is encrypted in transit through DTLS-SRTP.
 - Gateway should not become the routine media data path when direct authorized browser-to-service media can be established.
 - Media projection, transcoding, and recording remain workload concerns, not gateway protocol responsibilities.
-- Signed discovery, launch, or signaling records are not confidential unless their sensitive fields are encrypted.
+- Signed discovery, service access, or signaling records are not confidential unless their sensitive fields are encrypted.
 
 ## Validation and Security Invariants
 
@@ -338,16 +337,18 @@ Record acceptance requires:
 - Rebroadcast excludes events authored by self.
 - Allowed relay fanout classes are constrained to `t=constitute` or `t=swarm_discovery`.
 
-### Managed Launch Security
-- launch tokens must expire quickly
-- launch tokens must bind gateway, service, identity, and requesting device
-- services must reject invalid, expired, unsigned, or wrong-target launch tokens
-- browser launch/bootstrap must not rely on long-lived secrets in URL parameters
+### Service Access Security
+- service capabilities must expire quickly
+- service capabilities must bind gateway, service, identity, and requesting device
+- services must reject invalid, expired, unsigned, or wrong-target service capabilities
+- gateway must reject replayed CAAC service-access and service-signal request envelopes
+- gateway-to-service invocation payloads are sealed CAAC envelopes; NVR receives `serviceRequestEnvelope`, not clear service/control/admin bodies
+- browser service access/bootstrap must not rely on long-lived secrets in URL parameters
 
 ## Convergence Targets (Gateway -> Web)
 The following are executed during convergence:
 - service-backed device record parity
-- managed launch authorization parity
+- service access authorization parity
 - managed signaling envelope parity
 - identity/device resolution behavior and fallback order
 - zone membership durability and sync semantics

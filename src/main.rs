@@ -13,6 +13,12 @@ mod util;
 use crate::swarm_store::{RecordType, SwarmStoreMap};
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
+use constitute_protocol::{
+    seal_envelope, CaacEnvelope, ReplayCache, CAAC_KIND_SERVICE_ACCESS_SIGNAL,
+    CAAC_KIND_SERVICE_ACCESS_STATUS, DEFAULT_REQUEST_TTL_SECONDS,
+    EVENT_GATEWAY_SERVICE_ACCESS_STATUS, EVENT_GATEWAY_SERVICE_SIGNAL,
+    EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST, EVENT_GATEWAY_SERVICE_SIGNAL_STATUS,
+};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use reqwest::Client as HttpClient;
@@ -311,7 +317,7 @@ struct GatewayZoneSyncStatusPayload {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-struct GatewayManagedLaunchRequest {
+struct GatewayServiceAccessRequest {
     #[serde(rename = "requestId", default)]
     request_id: String,
     #[serde(rename = "toDevicePk", default)]
@@ -326,8 +332,8 @@ struct GatewayManagedLaunchRequest {
     service: String,
     #[serde(default)]
     capability: String,
-    #[serde(rename = "launchNonce", default)]
-    launch_nonce: String,
+    #[serde(rename = "accessNonce", default)]
+    access_nonce: String,
     #[serde(default)]
     zone: String,
     #[serde(rename = "appRepo", default)]
@@ -337,34 +343,15 @@ struct GatewayManagedLaunchRequest {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct GatewayManagedLaunchStatusPayload {
+struct GatewayServiceAccessStatusPayload {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(rename = "requestId")]
-    request_id: String,
-    status: String,
     #[serde(rename = "toDevicePk")]
     to_device_pk: String,
     #[serde(rename = "gatewayPk")]
     gateway_pk: String,
-    #[serde(rename = "identityId")]
-    identity_id: String,
-    #[serde(rename = "devicePk")]
-    device_pk: String,
-    #[serde(rename = "servicePk")]
-    service_pk: String,
-    service: String,
-    capability: String,
-    #[serde(rename = "launchToken", skip_serializing_if = "Option::is_none")]
-    launch_token: Option<String>,
-    #[serde(rename = "expiresAt", skip_serializing_if = "Option::is_none")]
-    expires_at: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    display: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    #[serde(rename = "statusEnvelope")]
+    status_envelope: CaacEnvelope,
     ts: u64,
 }
 
@@ -386,34 +373,20 @@ struct GatewaySignalRequest {
     signal_type: String,
     #[serde(default)]
     payload: Value,
-    #[serde(rename = "launchToken", default)]
-    launch_token: String,
+    #[serde(rename = "serviceCapability", default)]
+    service_capability: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 struct GatewaySignalStatusPayload {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(rename = "requestId")]
-    request_id: String,
-    status: String,
     #[serde(rename = "toDevicePk")]
     to_device_pk: String,
     #[serde(rename = "gatewayPk")]
     gateway_pk: String,
-    #[serde(rename = "identityId")]
-    identity_id: String,
-    #[serde(rename = "devicePk")]
-    device_pk: String,
-    #[serde(rename = "servicePk")]
-    service_pk: String,
-    service: String,
-    #[serde(rename = "signalType")]
-    signal_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    #[serde(rename = "statusEnvelope")]
+    status_envelope: CaacEnvelope,
     ts: u64,
 }
 
@@ -421,20 +394,12 @@ struct GatewaySignalStatusPayload {
 struct GatewaySignalPayload {
     #[serde(rename = "type")]
     kind: String,
-    #[serde(rename = "requestId")]
-    request_id: String,
+    #[serde(rename = "toDevicePk")]
+    to_device_pk: String,
     #[serde(rename = "gatewayPk")]
     gateway_pk: String,
-    #[serde(rename = "identityId")]
-    identity_id: String,
-    #[serde(rename = "devicePk")]
-    device_pk: String,
-    #[serde(rename = "servicePk")]
-    service_pk: String,
-    service: String,
-    #[serde(rename = "signalType")]
-    signal_type: String,
-    payload: Value,
+    #[serde(rename = "signalEnvelope")]
+    signal_envelope: CaacEnvelope,
     ts: u64,
 }
 
@@ -1134,6 +1099,7 @@ async fn main() -> Result<()> {
         seen: seen_cache.clone(),
         seen_ttl: validation.replay_window,
         seen_max: 4096,
+        caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
         remote_service_install_enabled: cfg.remote_service_install_enabled,
         remote_service_install_timeout_secs: cfg.remote_service_install_timeout_secs.max(60),
         http_client: http_client.clone(),
@@ -2151,76 +2117,127 @@ fn build_gateway_zone_sync_status_payload(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_gateway_managed_launch_status_payload(
-    req: &GatewayManagedLaunchRequest,
+fn build_gateway_service_access_status_payload(
+    req: &GatewayServiceAccessRequest,
     gateway_pk: &str,
+    gateway_sk: &str,
     status: &str,
-    launch_token: Option<String>,
+    service_capability: Option<String>,
     expires_at: Option<u64>,
     display: Option<Value>,
     reason: Option<String>,
     detail: Option<String>,
-) -> GatewayManagedLaunchStatusPayload {
-    GatewayManagedLaunchStatusPayload {
-        kind: "gateway_managed_launch_status".to_string(),
-        request_id: req.request_id.clone(),
-        status: status.to_string(),
+) -> Result<GatewayServiceAccessStatusPayload> {
+    let issued_at = util::now_unix_seconds() * 1000;
+    let status_expires_at = issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000);
+    let claims = json!({
+        "requestId": req.request_id,
+        "status": status,
+        "gatewayPk": gateway_pk,
+        "identityId": req.identity_id,
+        "devicePk": req.device_pk,
+        "servicePk": req.service_pk,
+        "service": req.service,
+        "capability": req.capability,
+        "serviceCapability": service_capability,
+        "expiresAt": expires_at,
+        "display": display,
+        "reason": reason,
+        "detail": detail,
+        "issuedAt": issued_at,
+        "ts": issued_at,
+    });
+    let status_envelope = seal_envelope(
+        CAAC_KIND_SERVICE_ACCESS_STATUS,
+        &claims,
+        gateway_sk,
+        &[req.device_pk.clone()],
+        issued_at,
+        status_expires_at,
+    )?;
+    Ok(GatewayServiceAccessStatusPayload {
+        kind: EVENT_GATEWAY_SERVICE_ACCESS_STATUS.to_string(),
         to_device_pk: req.device_pk.clone(),
         gateway_pk: gateway_pk.to_string(),
-        identity_id: req.identity_id.clone(),
-        device_pk: req.device_pk.clone(),
-        service_pk: req.service_pk.clone(),
-        service: req.service.clone(),
-        capability: req.capability.clone(),
-        launch_token,
-        expires_at,
-        display,
-        reason,
-        detail,
-        ts: util::now_unix_seconds() * 1000,
-    }
+        status_envelope,
+        ts: issued_at,
+    })
 }
 
 fn build_gateway_signal_status_payload(
     req: &GatewaySignalRequest,
     gateway_pk: &str,
+    gateway_sk: &str,
     status: &str,
     reason: Option<String>,
     detail: Option<String>,
 ) -> GatewaySignalStatusPayload {
+    let issued_at = util::now_unix_seconds() * 1000;
+    let status_envelope = seal_envelope(
+        CAAC_KIND_SERVICE_ACCESS_STATUS,
+        &json!({
+            "requestId": req.request_id,
+            "status": status,
+            "gatewayPk": gateway_pk,
+            "identityId": req.identity_id,
+            "devicePk": req.device_pk,
+            "servicePk": req.service_pk,
+            "service": req.service,
+            "signalType": req.signal_type,
+            "reason": reason,
+            "detail": detail,
+            "issuedAt": issued_at,
+            "ts": issued_at,
+        }),
+        gateway_sk,
+        &[req.device_pk.clone()],
+        issued_at,
+        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
+    )
+    .expect("seal service signal status");
     GatewaySignalStatusPayload {
-        kind: "gateway_signal_status".to_string(),
-        request_id: req.request_id.clone(),
-        status: status.to_string(),
+        kind: EVENT_GATEWAY_SERVICE_SIGNAL_STATUS.to_string(),
         to_device_pk: req.device_pk.clone(),
         gateway_pk: gateway_pk.to_string(),
-        identity_id: req.identity_id.clone(),
-        device_pk: req.device_pk.clone(),
-        service_pk: req.service_pk.clone(),
-        service: req.service.clone(),
-        signal_type: req.signal_type.clone(),
-        reason,
-        detail,
-        ts: util::now_unix_seconds() * 1000,
+        status_envelope,
+        ts: issued_at,
     }
 }
 
 fn build_gateway_signal_payload(
     req: &GatewaySignalRequest,
     gateway_pk: &str,
+    gateway_sk: &str,
+    signal_type: &str,
     payload: Value,
 ) -> GatewaySignalPayload {
+    let issued_at = util::now_unix_seconds() * 1000;
+    let signal_envelope = seal_envelope(
+        CAAC_KIND_SERVICE_ACCESS_SIGNAL,
+        &json!({
+            "requestId": req.request_id,
+            "gatewayPk": gateway_pk,
+            "identityId": req.identity_id,
+            "devicePk": req.device_pk,
+            "servicePk": req.service_pk,
+            "service": req.service,
+            "signalType": signal_type,
+            "payload": payload,
+            "issuedAt": issued_at,
+            "ts": issued_at,
+        }),
+        gateway_sk,
+        &[req.device_pk.clone()],
+        issued_at,
+        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
+    )
+    .expect("seal service signal payload");
     GatewaySignalPayload {
-        kind: "gateway_signal".to_string(),
-        request_id: req.request_id.clone(),
+        kind: EVENT_GATEWAY_SERVICE_SIGNAL.to_string(),
+        to_device_pk: req.device_pk.clone(),
         gateway_pk: gateway_pk.to_string(),
-        identity_id: req.identity_id.clone(),
-        device_pk: req.device_pk.clone(),
-        service_pk: req.service_pk.clone(),
-        service: req.service.clone(),
-        signal_type: req.signal_type.clone(),
-        payload,
-        ts: util::now_unix_seconds() * 1000,
+        signal_envelope,
+        ts: issued_at,
     }
 }
 
@@ -2477,13 +2494,13 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
             | "gateway_service_install_status"
             | "gateway_zone_sync_request"
             | "gateway_zone_sync_status"
-            | "gateway_managed_launch_request"
-            | "gateway_managed_launch_status"
+            | "gateway_service_access_request"
+            | "gateway_service_access_status"
             | "gateway_grant_request"
             | "gateway_grant_status"
-            | "gateway_signal_request"
-            | "gateway_signal_status"
-            | "gateway_signal"
+            | EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST
+            | EVENT_GATEWAY_SERVICE_SIGNAL_STATUS
+            | EVENT_GATEWAY_SERVICE_SIGNAL
     )
 }
 
@@ -2587,6 +2604,7 @@ struct InboundContext {
     seen: Arc<Mutex<SeenCache>>,
     seen_ttl: Duration,
     seen_max: usize,
+    caac_replay: Arc<Mutex<ReplayCache>>,
     remote_service_install_enabled: bool,
     remote_service_install_timeout_secs: u64,
     http_client: HttpClient,
@@ -3009,8 +3027,8 @@ async fn process_inbound_event(
             return;
         }
 
-        if kind == "gateway_managed_launch_request" {
-            managed::handle_gateway_managed_launch_request(&ctx, &nostr_ev, &payload).await;
+        if kind == "gateway_service_access_request" {
+            managed::handle_gateway_service_access_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
@@ -3019,7 +3037,7 @@ async fn process_inbound_event(
             return;
         }
 
-        if kind == "gateway_signal_request" {
+        if kind == EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST {
             managed::handle_gateway_signal_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
@@ -3986,6 +4004,7 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
@@ -4175,6 +4194,7 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
@@ -4320,6 +4340,7 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
+            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
