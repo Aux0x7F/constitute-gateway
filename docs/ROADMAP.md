@@ -106,12 +106,14 @@ Exit criteria:
 ### Phase F: Host-Capability Services
 Objectives:
 - introduce cryptographic media projection and warm NVR stream planning before burying stream lifecycle in gateway or recording
-- introduce `constitute-security` as a host-local capability service surfaced in UI as `Security`
+- introduce `constitute-logging` as the structured event truth capability feeding operators, development diagnostics, Cybersecurity, and Physical Security incident timelines
+- introduce `constitute-cybersec` as a cyber/network/service security capability surfaced in UI as `Cybersecurity`
 - introduce `constitute-storage` as a host-local capability service for encrypted content-addressed object/archive semantics
+- keep `constitute-physec` as a future Physical Security app surfaced in UI as `Security`, consuming NVR, Zigbee, and future sensor projections rather than absorbing gateway capability internals
 - keep gateway as orchestrator/projector of those capabilities rather than making it their permanent implementation home
 
 Exit criteria:
 - gateway remains admission/signaling/orchestration boundary rather than routine media data path
-- workloads can request capability leases instead of embedding security/storage logic directly
+- workloads can request capability leases instead of embedding logging/cybersecurity/storage logic directly
 - hostile camera-network posture and higher-level anomaly reporting have an explicit home
 - durable object/blob/archive semantics have an explicit shared home without forcing all service config/runtime state into storage

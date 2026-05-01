@@ -151,8 +151,11 @@ This is future host-capability direction, not the current active implementation 
 
 - gateway should converge toward orchestrating and projecting host capabilities rather than directly embodying every host concern
 - planned host-local capability services include:
-  - `constitute-security`
+  - `constitute-logging`
+  - `constitute-cybersec`
   - `constitute-storage`
+- planned product/app surfaces that may consume gateway-projected capability state include:
+  - `constitute-physec`
 - gateway should:
   - authorize and coordinate capability use
   - surface status and notifications
@@ -167,14 +170,15 @@ This is future host-capability direction, not the current active implementation 
 - gateway UI focuses on:
   - host/service inventory
   - network posture
-  - security posture
+  - cybersecurity posture
   - deploy/update/runtime state
   - hosted-service control
 
 ### Planned Capability Leases
 - future workloads should consume explicit host-capability leases instead of embedding those systems directly
 - expected early lease targets:
-  - hostile camera-network policy from `constitute-security`
+  - structured event truth from `constitute-logging`
+  - hostile camera-network policy from `constitute-cybersec`
   - durable encrypted object/archive allocation from `constitute-storage`
 
 ## Documentation Surface
