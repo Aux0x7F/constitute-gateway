@@ -11,7 +11,7 @@ operator-gui = ["dep:eframe"]
 
 [dependencies]
 anyhow = "1"
-constitute-protocol = { git = "https://github.com/Aux0x7F/constitute-protocol.git", rev = "7c357e2909cdae8aaa0e915108f02e1e4a0af93a" }
+constitute-protocol = { git = "https://github.com/Aux0x7F/constitute-protocol.git", rev = "11eb917d965712d5e2571f2effa5730c7102f317" }
 argon2 = "0.5"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
