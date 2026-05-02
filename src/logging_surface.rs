@@ -108,9 +108,11 @@ fn logging_url() -> Option<String> {
 }
 
 fn outbox_path() -> Option<PathBuf> {
-    std::env::var("CONSTITUTE_GATEWAY_LOG_OUTBOX")
+    let override_path = std::env::var("CONSTITUTE_GATEWAY_LOG_OUTBOX")
         .ok()
         .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
+        .filter(|value| !value.is_empty());
+    Some(override_path.map(PathBuf::from).unwrap_or_else(|| {
+        PathBuf::from(crate::platform::default_data_dir()).join("log-events.jsonl")
+    }))
 }
