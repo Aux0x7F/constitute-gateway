@@ -12,6 +12,8 @@ It is not the permanent UI container for first-party apps, and it is not a paral
 The active contract slice aligns with:
 - `constitute-account` for browser identity/session/grant authority and shared runtime
 - `constitute-gateway-ui` for gateway-specific management UX
+- `constitute-storage` for encrypted object/index substrate health and proof-record storage
+- `constitute-logging` for blind structured event observation, safe-fact indexing, and operator projections
 - `constitute-nvr` for hosted service inventory and live preview signaling
 - `constitute-nvr-ui` for managed app surface bootstrap
 
@@ -75,15 +77,18 @@ Key storage:
   - `ts`, `ttl`
 
 ## Hosted Service Model
-Gateway may host multiple service-backed devices on the same machine.
+Gateway may host multiple service-backed devices and host-local capability services on the same machine.
+The gateway-hosted service inventory is an installed-service health/configuration projection, not a launcher list.
+Some installed services expose an app action, such as NVR opening Security Cameras; others, such as storage, primarily expose health, configuration, and capability state.
 
 For each hosted service the gateway should be able to publish:
-- service slug (`nvr`)
-- hosted service device key
+- service slug (`nvr`, `storage`)
+- hosted service device key when the service has one, or a stable host-local service identifier for local capability services
 - `hostGatewayPk`
 - version
 - freshness / last-seen
 - service access availability / managed status
+- safe service health/configuration summary
 
 Gateway owns:
 - install/update/control requests
@@ -92,6 +97,7 @@ Gateway owns:
 - service inventory
 
 Gateway does not need to be the long-term UI container for those services.
+Gateway also does not treat every service inventory item as launchable; launch is an optional action owned by app-backed services.
 
 ## Service Access Model
 Canonical flow:
@@ -144,10 +150,13 @@ Active sprint direction:
 - capability-enforced managed service access
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
 - explicit signed-versus-encrypted audit for service access, signaling, and session metadata
+- installed-service projection for `constitute-storage` in the hosted-service inventory, with health/config facts and no launcher implication
+- cursor-based logging surface for `constitute-logging`, replacing direct storage proof as the durable observability path
+- installed-service projection for `constitute-logging` in the hosted-service inventory, with health/config facts and optional app action
 
-## Planned Host-Capability Direction
+## Host-Capability Direction
 
-This is future host-capability direction, not the current active implementation slice.
+Storage foundation is the current durable substrate. Logging is now the active observability slice; the other host capabilities below remain planned.
 
 - gateway should converge toward orchestrating and projecting host capabilities rather than directly embodying every host concern
 - planned host-local capability services include:
@@ -180,6 +189,15 @@ This is future host-capability direction, not the current active implementation 
   - structured event truth from `constitute-logging`
   - hostile camera-network policy from `constitute-cybersec`
   - durable encrypted object/archive allocation from `constitute-storage`
+
+### Logging Surface
+Gateway exposes a durable cursor-based logging surface for `constitute-logging`.
+Current producer-owned event streams cover service access, service signaling, hosted service health, storage/logging availability, account bridge failures, and control-plane errors.
+
+Gateway formulates safe facts from its own plaintext context and encrypts sensitive detail before exposing the log record.
+The logging surface intentionally excludes identities, device public keys, service capabilities, CAAC plaintext, raw payloads, decrypted request bodies, credential-bearing URLs, and raw secret material from safe facts.
+
+Direct storage proof hooks are retired as the primary observability path. Storage remains the durable archive substrate behind `constitute-logging`.
 
 ## Documentation Surface
 - `README.md`

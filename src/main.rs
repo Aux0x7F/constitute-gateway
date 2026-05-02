@@ -2,6 +2,7 @@ mod discovery;
 mod grants;
 mod keystore;
 mod local_relay;
+mod logging_surface;
 mod managed;
 mod nostr;
 mod platform;
