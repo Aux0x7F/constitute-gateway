@@ -29,6 +29,29 @@ struct HostedNvrManifest {
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+struct HostedStorageManifest {
+    #[serde(default)]
+    service: String,
+    #[serde(default)]
+    service_pk: String,
+    #[serde(default)]
+    device_label: String,
+    #[serde(default)]
+    service_version: String,
+    #[serde(default)]
+    host_gateway_pk: String,
+    #[serde(default)]
+    api_bind: String,
+    #[serde(default)]
+    api_base_url: String,
+    #[serde(default)]
+    health_url: String,
+    #[serde(default)]
+    capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
 pub(super) struct HostedNvrConfig {
     #[serde(default)]
     service_version: String,
@@ -242,6 +265,9 @@ async fn load_hosted_nvr_service_from_manifest(
                         freshness_ms: 0,
                         status,
                         camera_count,
+                        facts: json!({
+                            "configuredSources": camera_count,
+                        }),
                     },
                     api_base_url,
                     health,
@@ -283,6 +309,9 @@ async fn load_hosted_nvr_service_from_manifest(
             freshness_ms: 0,
             status,
             camera_count,
+            facts: json!({
+                "configuredSources": camera_count,
+            }),
         },
         api_base_url,
         health: json!({}),
@@ -382,6 +411,9 @@ async fn load_hosted_nvr_service(
                             freshness_ms: 0,
                             status,
                             camera_count,
+                            facts: json!({
+                                "configuredSources": camera_count,
+                            }),
                         },
                         api_base_url,
                         health,
@@ -429,6 +461,9 @@ async fn load_hosted_nvr_service(
                 freshness_ms: 0,
                 status,
                 camera_count,
+                facts: json!({
+                    "configuredSources": camera_count,
+                }),
             },
             api_base_url,
             health: json!({}),
@@ -438,14 +473,264 @@ async fn load_hosted_nvr_service(
     None
 }
 
+fn storage_manifest_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    out.push(PathBuf::from(
+        "/data/constitute-storage/hosted-service.json",
+    ));
+    out.push(PathBuf::from("/run/constitute/storage-hosted-service.json"));
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        out.push(
+            PathBuf::from(local_appdata)
+                .join("Constitute")
+                .join("storage")
+                .join("hosted-service.json"),
+        );
+    }
+    out
+}
+
+fn storage_local_base_url(bind: &str) -> Option<String> {
+    let mut raw = bind.trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    if !raw.contains(':') {
+        raw = format!("127.0.0.1:{raw}");
+    }
+    let addr: SocketAddr = raw.parse().ok()?;
+    Some(format!("http://127.0.0.1:{}", addr.port()))
+}
+
+fn storage_probe_base_urls() -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Ok(raw) = std::env::var("CONSTITUTE_STORAGE_URL") {
+        let value = raw.trim().trim_end_matches('/').to_string();
+        if !value.is_empty() {
+            urls.push(value);
+        }
+    }
+    urls.push("http://127.0.0.1:7478".to_string());
+    urls.sort();
+    urls.dedup();
+    urls
+}
+
+async fn fetch_json(client: &HttpClient, url: &str) -> Option<Value> {
+    let resp = client
+        .get(url)
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    resp.json::<Value>().await.ok()
+}
+
+fn storage_capabilities(manifest: &HostedStorageManifest) -> Value {
+    if manifest.capabilities.is_empty() {
+        json!([
+            "encrypted_objects",
+            "content_addressed_chunks",
+            "encrypted_index_shards",
+            "key_grants",
+            "pin_leases",
+            "prune",
+            "local_search",
+            "watch"
+        ])
+    } else {
+        json!(manifest.capabilities)
+    }
+}
+
+fn storage_record_from_parts(
+    gateway_pk: &str,
+    manifest: &HostedStorageManifest,
+    api_base_url: Option<&str>,
+    health: Option<&Value>,
+) -> discovery::HostedServiceRecord {
+    let now = util::now_unix_seconds() * 1000;
+    let service = if manifest.service.trim().is_empty() {
+        "storage".to_string()
+    } else {
+        manifest.service.trim().to_ascii_lowercase()
+    };
+    let host_gateway_pk = if manifest.host_gateway_pk.trim().is_empty() {
+        gateway_pk.trim().to_string()
+    } else {
+        manifest.host_gateway_pk.trim().to_string()
+    };
+    let health_status = health
+        .and_then(|body| body.get("status").and_then(|value| value.as_str()))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| {
+            if api_base_url.is_some() {
+                "offline"
+            } else {
+                "configured"
+            }
+        })
+        .to_ascii_lowercase();
+    let status = if health_status == "ok" {
+        "online".to_string()
+    } else {
+        health_status
+    };
+    let mut facts = json!({
+        "capabilities": storage_capabilities(manifest),
+    });
+    if let Some(base) = api_base_url {
+        facts["apiBaseUrl"] = json!(base);
+        facts["healthUrl"] = json!(if manifest.health_url.trim().is_empty() {
+            format!("{}/health", base.trim_end_matches('/'))
+        } else {
+            manifest.health_url.trim().to_string()
+        });
+    }
+    if let Some(body) = health {
+        facts["health"] = json!({
+            "status": body
+                .get("status")
+                .and_then(|value| value.as_str())
+                .unwrap_or("unknown"),
+            "objects": body.get("objects").and_then(|value| value.as_u64()).unwrap_or(0),
+            "chunks": body.get("chunks").and_then(|value| value.as_u64()).unwrap_or(0),
+            "indexShards": body.get("indexShards").and_then(|value| value.as_u64()).unwrap_or(0),
+            "keyGrants": body.get("keyGrants").and_then(|value| value.as_u64()).unwrap_or(0),
+            "pinLeases": body.get("pinLeases").and_then(|value| value.as_u64()).unwrap_or(0),
+            "materializedEntries": body
+                .get("materializedEntries")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+        });
+    }
+    discovery::HostedServiceRecord {
+        device_pk: if manifest.service_pk.trim().is_empty() {
+            format!("storage:{}", host_gateway_pk)
+        } else {
+            manifest.service_pk.trim().to_string()
+        },
+        device_label: if manifest.device_label.trim().is_empty() {
+            "Constitute Storage".to_string()
+        } else {
+            manifest.device_label.trim().to_string()
+        },
+        device_kind: "service".to_string(),
+        service,
+        host_gateway_pk,
+        service_version: if manifest.service_version.trim().is_empty() {
+            "unknown".to_string()
+        } else {
+            manifest.service_version.trim().to_string()
+        },
+        updated_at: now,
+        freshness_ms: 0,
+        status,
+        camera_count: 0,
+        facts,
+    }
+}
+
+async fn load_hosted_storage_from_manifest(
+    client: &HttpClient,
+    gateway_pk: &str,
+    manifest: &HostedStorageManifest,
+) -> Option<discovery::HostedServiceRecord> {
+    let api_base_url = if !manifest.api_base_url.trim().is_empty() {
+        Some(
+            manifest
+                .api_base_url
+                .trim()
+                .trim_end_matches('/')
+                .to_string(),
+        )
+    } else {
+        storage_local_base_url(&manifest.api_bind)
+    };
+    let health_url = if !manifest.health_url.trim().is_empty() {
+        manifest.health_url.trim().to_string()
+    } else {
+        api_base_url
+            .as_ref()
+            .map(|base| format!("{}/health", base.trim_end_matches('/')))
+            .unwrap_or_default()
+    };
+    let health = if health_url.is_empty() {
+        None
+    } else {
+        fetch_json(client, &health_url).await
+    };
+    Some(storage_record_from_parts(
+        gateway_pk,
+        manifest,
+        api_base_url.as_deref(),
+        health.as_ref(),
+    ))
+}
+
+async fn load_hosted_storage_from_base_url(
+    client: &HttpClient,
+    gateway_pk: &str,
+    api_base_url: &str,
+) -> Option<discovery::HostedServiceRecord> {
+    let base = api_base_url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return None;
+    }
+    let manifest = fetch_json(client, &format!("{base}/hosted-service.json"))
+        .await
+        .and_then(|body| serde_json::from_value::<HostedStorageManifest>(body).ok())
+        .unwrap_or_default();
+    let health = fetch_json(client, &format!("{base}/health")).await?;
+    Some(storage_record_from_parts(
+        gateway_pk,
+        &manifest,
+        Some(&base),
+        Some(&health),
+    ))
+}
+
+async fn load_hosted_storage_service(
+    client: &HttpClient,
+    gateway_pk: &str,
+) -> Option<discovery::HostedServiceRecord> {
+    for path in storage_manifest_candidates() {
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let manifest: HostedStorageManifest = match serde_json::from_str(&raw) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if let Some(record) = load_hosted_storage_from_manifest(client, gateway_pk, &manifest).await
+        {
+            return Some(record);
+        }
+    }
+    for base in storage_probe_base_urls() {
+        if let Some(record) = load_hosted_storage_from_base_url(client, gateway_pk, &base).await {
+            return Some(record);
+        }
+    }
+    None
+}
+
 pub(super) async fn load_hosted_services_snapshot(
     client: &HttpClient,
     gateway_pk: &str,
 ) -> Vec<discovery::HostedServiceRecord> {
-    match load_hosted_nvr_service(client, gateway_pk).await {
-        Some(service) => vec![service.record],
-        None => Vec::new(),
+    let mut services = Vec::new();
+    if let Some(service) = load_hosted_nvr_service(client, gateway_pk).await {
+        services.push(service.record);
     }
+    if let Some(service) = load_hosted_storage_service(client, gateway_pk).await {
+        services.push(service);
+    }
+    services
 }
 
 async fn is_requester_authorized_for_service_install(

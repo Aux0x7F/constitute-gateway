@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::sync::watch;
 
@@ -85,6 +85,8 @@ pub struct HostedServiceRecord {
     pub status: String,
     #[serde(default)]
     pub camera_count: u64,
+    #[serde(default)]
+    pub facts: Value,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -240,6 +242,7 @@ impl HostedServiceRecord {
             "freshnessMs": self.freshness_ms,
             "status": self.status,
             "cameraCount": self.camera_count,
+            "facts": self.facts,
         })
     }
 }
@@ -397,6 +400,7 @@ pub fn service_version() -> String {
 #[cfg(test)]
 mod tests {
     use super::{HostedServiceRecord, SwarmDeviceRecord};
+    use serde_json::json;
 
     #[test]
     fn device_record_json_keeps_device_kind_and_hosted_services() {
@@ -422,6 +426,9 @@ mod tests {
             freshness_ms: 0,
             status: "online".to_string(),
             camera_count: 1,
+            facts: json!({
+                "configuredSources": 1,
+            }),
         });
 
         let json = record.to_json();

@@ -12,6 +12,7 @@ It is not the permanent UI container for first-party apps, and it is not a paral
 The active contract slice aligns with:
 - `constitute-account` for browser identity/session/grant authority and shared runtime
 - `constitute-gateway-ui` for gateway-specific management UX
+- `constitute-storage` for encrypted object/index substrate health and proof-record storage
 - `constitute-nvr` for hosted service inventory and live preview signaling
 - `constitute-nvr-ui` for managed app surface bootstrap
 
@@ -75,15 +76,18 @@ Key storage:
   - `ts`, `ttl`
 
 ## Hosted Service Model
-Gateway may host multiple service-backed devices on the same machine.
+Gateway may host multiple service-backed devices and host-local capability services on the same machine.
+The gateway-hosted service inventory is an installed-service health/configuration projection, not a launcher list.
+Some installed services expose an app action, such as NVR opening Security Cameras; others, such as storage, primarily expose health, configuration, and capability state.
 
 For each hosted service the gateway should be able to publish:
-- service slug (`nvr`)
-- hosted service device key
+- service slug (`nvr`, `storage`)
+- hosted service device key when the service has one, or a stable host-local service identifier for local capability services
 - `hostGatewayPk`
 - version
 - freshness / last-seen
 - service access availability / managed status
+- safe service health/configuration summary
 
 Gateway owns:
 - install/update/control requests
@@ -92,6 +96,7 @@ Gateway owns:
 - service inventory
 
 Gateway does not need to be the long-term UI container for those services.
+Gateway also does not treat every service inventory item as launchable; launch is an optional action owned by app-backed services.
 
 ## Service Access Model
 Canonical flow:
@@ -145,6 +150,7 @@ Active sprint direction:
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
 - explicit signed-versus-encrypted audit for service access, signaling, and session metadata
 - optional safe-fact proof submission to `constitute-storage` through `CONSTITUTE_STORAGE_URL`, without identity IDs, device PKs, service capabilities, raw payloads, or decrypted request bodies
+- installed-service projection for `constitute-storage` in the hosted-service inventory, with health/config facts and no launcher implication
 
 ## Host-Capability Direction
 
