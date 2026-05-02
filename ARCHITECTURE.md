@@ -13,6 +13,7 @@ The active contract slice aligns with:
 - `constitute-account` for browser identity/session/grant authority and shared runtime
 - `constitute-gateway-ui` for gateway-specific management UX
 - `constitute-storage` for encrypted object/index substrate health and proof-record storage
+- `constitute-logging` for blind structured event observation, safe-fact indexing, and operator projections
 - `constitute-nvr` for hosted service inventory and live preview signaling
 - `constitute-nvr-ui` for managed app surface bootstrap
 
@@ -149,12 +150,13 @@ Active sprint direction:
 - capability-enforced managed service access
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
 - explicit signed-versus-encrypted audit for service access, signaling, and session metadata
-- optional safe-fact proof submission to `constitute-storage` through `CONSTITUTE_STORAGE_URL`, without identity IDs, device PKs, service capabilities, raw payloads, or decrypted request bodies
 - installed-service projection for `constitute-storage` in the hosted-service inventory, with health/config facts and no launcher implication
+- cursor-based logging surface for `constitute-logging`, replacing direct storage proof as the durable observability path
+- installed-service projection for `constitute-logging` in the hosted-service inventory, with health/config facts and optional app action
 
 ## Host-Capability Direction
 
-Storage is now an active substrate slice; the other host capabilities below remain planned.
+Storage foundation is the current durable substrate. Logging is now the active observability slice; the other host capabilities below remain planned.
 
 - gateway should converge toward orchestrating and projecting host capabilities rather than directly embodying every host concern
 - planned host-local capability services include:
@@ -188,10 +190,14 @@ Storage is now an active substrate slice; the other host capabilities below rema
   - hostile camera-network policy from `constitute-cybersec`
   - durable encrypted object/archive allocation from `constitute-storage`
 
-### Storage Proof Hook
-Gateway can submit safe structured proof facts to `constitute-storage` when `CONSTITUTE_STORAGE_URL` is set.
-Current proof records cover sealed service-access and service-signal requests.
-The hook intentionally excludes identities, device public keys, source scope, service capabilities, raw payloads, and raw error details.
+### Logging Surface
+Gateway exposes a durable cursor-based logging surface for `constitute-logging`.
+Current producer-owned event streams cover service access, service signaling, hosted service health, storage/logging availability, account bridge failures, and control-plane errors.
+
+Gateway formulates safe facts from its own plaintext context and encrypts sensitive detail before exposing the log record.
+The logging surface intentionally excludes identities, device public keys, service capabilities, CAAC plaintext, raw payloads, decrypted request bodies, credential-bearing URLs, and raw secret material from safe facts.
+
+Direct storage proof hooks are retired as the primary observability path. Storage remains the durable archive substrate behind `constitute-logging`.
 
 ## Documentation Surface
 - `README.md`

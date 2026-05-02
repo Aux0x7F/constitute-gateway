@@ -1,8 +1,8 @@
 use super::*;
 use constitute_protocol::{
-    open_envelope, seal_envelope, CaacEnvelope, ServiceAccessCapabilityClaims,
-    CAAC_KIND_SERVICE_ACCESS_INVOCATION, CAAC_KIND_SERVICE_ACCESS_REQUEST,
-    CAAC_KIND_SERVICE_ACCESS_SIGNAL, DEFAULT_REQUEST_TTL_SECONDS,
+    open_envelope, seal_envelope, CaacEnvelope, LogCategory, LogOutcome, LogSeverity,
+    LogSubjectRef, ServiceAccessCapabilityClaims, CAAC_KIND_SERVICE_ACCESS_INVOCATION,
+    CAAC_KIND_SERVICE_ACCESS_REQUEST, CAAC_KIND_SERVICE_ACCESS_SIGNAL, DEFAULT_REQUEST_TTL_SECONDS,
 };
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -47,6 +47,8 @@ struct HostedStorageManifest {
     api_base_url: String,
     #[serde(default)]
     health_url: String,
+    #[serde(default)]
+    app_url: String,
     #[serde(default)]
     capabilities: Vec<String>,
 }
@@ -490,6 +492,23 @@ fn storage_manifest_candidates() -> Vec<PathBuf> {
     out
 }
 
+fn logging_manifest_candidates() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    out.push(PathBuf::from(
+        "/data/constitute-logging/hosted-service.json",
+    ));
+    out.push(PathBuf::from("/run/constitute/logging-hosted-service.json"));
+    if let Ok(local_appdata) = std::env::var("LOCALAPPDATA") {
+        out.push(
+            PathBuf::from(local_appdata)
+                .join("Constitute")
+                .join("logging")
+                .join("hosted-service.json"),
+        );
+    }
+    out
+}
+
 fn storage_local_base_url(bind: &str) -> Option<String> {
     let mut raw = bind.trim().to_string();
     if raw.is_empty() {
@@ -511,6 +530,20 @@ fn storage_probe_base_urls() -> Vec<String> {
         }
     }
     urls.push("http://127.0.0.1:7478".to_string());
+    urls.sort();
+    urls.dedup();
+    urls
+}
+
+fn logging_probe_base_urls() -> Vec<String> {
+    let mut urls = Vec::new();
+    if let Ok(raw) = std::env::var("CONSTITUTE_LOGGING_URL") {
+        let value = raw.trim().trim_end_matches('/').to_string();
+        if !value.is_empty() {
+            urls.push(value);
+        }
+    }
+    urls.push("http://127.0.0.1:7480".to_string());
     urls.sort();
     urls.dedup();
     urls
@@ -607,9 +640,34 @@ fn storage_record_from_parts(
                 .unwrap_or(0),
         });
     }
+    if service == "logging" {
+        facts["appUrl"] = json!(if manifest.app_url.trim().is_empty() {
+            "/constitute-logging-ui/".to_string()
+        } else {
+            manifest.app_url.trim().to_string()
+        });
+        if let Some(body) = health {
+            facts["health"] = json!({
+                "status": body
+                    .get("status")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown"),
+                "events": body.get("events").and_then(|value| value.as_u64()).unwrap_or(0),
+                "producers": body.get("producers").and_then(|value| value.as_u64()).unwrap_or(0),
+                "storageStatus": body
+                    .get("storageStatus")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or("unknown"),
+                "archiveContainerId": body
+                    .get("archiveContainerId")
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(""),
+            });
+        }
+    }
     discovery::HostedServiceRecord {
         device_pk: if manifest.service_pk.trim().is_empty() {
-            format!("storage:{}", host_gateway_pk)
+            format!("{}:{}", service, host_gateway_pk)
         } else {
             manifest.service_pk.trim().to_string()
         },
@@ -719,6 +777,35 @@ async fn load_hosted_storage_service(
     None
 }
 
+async fn load_hosted_logging_service(
+    client: &HttpClient,
+    gateway_pk: &str,
+) -> Option<discovery::HostedServiceRecord> {
+    for path in logging_manifest_candidates() {
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(_) => continue,
+        };
+        let mut manifest: HostedStorageManifest = match serde_json::from_str(&raw) {
+            Ok(manifest) => manifest,
+            Err(_) => continue,
+        };
+        if manifest.service.trim().is_empty() {
+            manifest.service = "logging".to_string();
+        }
+        if let Some(record) = load_hosted_storage_from_manifest(client, gateway_pk, &manifest).await
+        {
+            return Some(record);
+        }
+    }
+    for base in logging_probe_base_urls() {
+        if let Some(record) = load_hosted_storage_from_base_url(client, gateway_pk, &base).await {
+            return Some(record);
+        }
+    }
+    None
+}
+
 pub(super) async fn load_hosted_services_snapshot(
     client: &HttpClient,
     gateway_pk: &str,
@@ -728,6 +815,9 @@ pub(super) async fn load_hosted_services_snapshot(
         services.push(service.record);
     }
     if let Some(service) = load_hosted_storage_service(client, gateway_pk).await {
+        services.push(service);
+    }
+    if let Some(service) = load_hosted_logging_service(client, gateway_pk).await {
         services.push(service);
     }
     services
@@ -1749,16 +1839,20 @@ pub(super) async fn handle_gateway_service_access_request(
         target_gateway_pk = %req.to_device_pk,
         "received sealed service access request"
     );
-    crate::storage_proof::submit_safe_event(
+    crate::logging_surface::submit_safe_event(
         &ctx.http_client,
-        "gateway-proof",
-        "gateway.service_access.request",
-        "gateway",
-        "normal",
+        "managed",
+        LogCategory::ServiceAccess,
+        LogSeverity::Info,
+        LogOutcome::Observed,
+        LogSubjectRef {
+            kind: "service".to_string(),
+            id: Some(req.service.clone()),
+            display: Some(req.app_repo.clone()),
+        },
         &["gateway", "service_access"],
         json!({
             "service": req.service.clone(),
-            "capability": req.capability.clone(),
             "appRepo": req.app_repo.clone(),
         }),
     )
@@ -1954,12 +2048,17 @@ pub(super) async fn handle_gateway_signal_request(
         signal_type = %req.signal_type,
         "received sealed gateway service signal request"
     );
-    crate::storage_proof::submit_safe_event(
+    crate::logging_surface::submit_safe_event(
         &ctx.http_client,
-        "gateway-proof",
-        "gateway.service_signal.request",
-        "gateway",
-        "normal",
+        "managed",
+        LogCategory::ServiceSignal,
+        LogSeverity::Info,
+        LogOutcome::Observed,
+        LogSubjectRef {
+            kind: "service".to_string(),
+            id: Some(req.service.clone()),
+            display: Some(req.service.clone()),
+        },
         &["gateway", "service_signal"],
         json!({
             "service": req.service.clone(),

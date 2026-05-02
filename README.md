@@ -6,6 +6,7 @@ Native gateway service for Constitution browser surfaces. This repository provid
 - Nostr-based discovery bootstrap and zone presence publication
 - Gateway local relay surface for web clients
 - Zone-scoped UDP/QUIC mesh transport and DHT-style request/response primitives
+- Hosted service inventory, service access, and producer-owned logging surface
 - Windows and Linux service install/update paths
 
 Out of scope:
@@ -20,6 +21,7 @@ Implemented:
 - UDP forwarding fanout and hop bounds
 - Optional QUIC datagram transport path with local integration tests
 - Release install/update scripts for Windows and Linux services
+- CAAC service access and hosted-service inventory for NVR, storage, and logging capability services
 
 In progress:
 - Transport hardening and operational tuning for difficult NAT topologies
