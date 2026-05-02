@@ -144,10 +144,11 @@ Active sprint direction:
 - capability-enforced managed service access
 - gateway-mediated signaling without leaking long-lived browser secrets to app surfaces
 - explicit signed-versus-encrypted audit for service access, signaling, and session metadata
+- optional safe-fact proof submission to `constitute-storage` through `CONSTITUTE_STORAGE_URL`, without identity IDs, device PKs, service capabilities, raw payloads, or decrypted request bodies
 
-## Planned Host-Capability Direction
+## Host-Capability Direction
 
-This is future host-capability direction, not the current active implementation slice.
+Storage is now an active substrate slice; the other host capabilities below remain planned.
 
 - gateway should converge toward orchestrating and projecting host capabilities rather than directly embodying every host concern
 - planned host-local capability services include:
@@ -180,6 +181,11 @@ This is future host-capability direction, not the current active implementation 
   - structured event truth from `constitute-logging`
   - hostile camera-network policy from `constitute-cybersec`
   - durable encrypted object/archive allocation from `constitute-storage`
+
+### Storage Proof Hook
+Gateway can submit safe structured proof facts to `constitute-storage` when `CONSTITUTE_STORAGE_URL` is set.
+Current proof records cover sealed service-access and service-signal requests.
+The hook intentionally excludes identities, device public keys, source scope, service capabilities, raw payloads, and raw error details.
 
 ## Documentation Surface
 - `README.md`

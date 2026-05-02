@@ -1464,6 +1464,20 @@ pub(super) async fn handle_gateway_service_access_request(
         target_gateway_pk = %req.to_device_pk,
         "received sealed service access request"
     );
+    crate::storage_proof::submit_safe_event(
+        &ctx.http_client,
+        "gateway-proof",
+        "gateway.service_access.request",
+        "gateway",
+        "normal",
+        &["gateway", "service_access"],
+        json!({
+            "service": req.service.clone(),
+            "capability": req.capability.clone(),
+            "appRepo": req.app_repo.clone(),
+        }),
+    )
+    .await;
 
     if requester_pk != req.device_pk {
         publish_service_access_status_for_request(
@@ -1655,6 +1669,19 @@ pub(super) async fn handle_gateway_signal_request(
         signal_type = %req.signal_type,
         "received sealed gateway service signal request"
     );
+    crate::storage_proof::submit_safe_event(
+        &ctx.http_client,
+        "gateway-proof",
+        "gateway.service_signal.request",
+        "gateway",
+        "normal",
+        &["gateway", "service_signal"],
+        json!({
+            "service": req.service.clone(),
+            "signalType": req.signal_type.clone(),
+        }),
+    )
+    .await;
 
     let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
         build_gateway_signal_status_payload(

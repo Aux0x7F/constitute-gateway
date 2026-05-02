@@ -6,6 +6,7 @@ mod managed;
 mod nostr;
 mod platform;
 mod relay;
+mod storage_proof;
 mod swarm_store;
 mod transport;
 mod util;
