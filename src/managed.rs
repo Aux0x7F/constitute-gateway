@@ -579,6 +579,20 @@ fn storage_capabilities(manifest: &HostedStorageManifest) -> Value {
     }
 }
 
+fn logging_capabilities(manifest: &HostedStorageManifest) -> Value {
+    if manifest.capabilities.is_empty() {
+        json!([
+            "blind_observation",
+            "safe_fact_index",
+            "cursor_outbox",
+            "live_watch",
+            "storage_archive"
+        ])
+    } else {
+        json!(manifest.capabilities)
+    }
+}
+
 fn storage_record_from_parts(
     gateway_pk: &str,
     manifest: &HostedStorageManifest,
@@ -613,7 +627,11 @@ fn storage_record_from_parts(
         health_status
     };
     let mut facts = json!({
-        "capabilities": storage_capabilities(manifest),
+        "capabilities": if service == "logging" {
+            logging_capabilities(manifest)
+        } else {
+            storage_capabilities(manifest)
+        },
     });
     if let Some(base) = api_base_url {
         facts["apiBaseUrl"] = json!(base);
@@ -672,7 +690,11 @@ fn storage_record_from_parts(
             manifest.service_pk.trim().to_string()
         },
         device_label: if manifest.device_label.trim().is_empty() {
-            "Constitute Storage".to_string()
+            if service == "logging" {
+                "Constitute Logging".to_string()
+            } else {
+                "Constitute Storage".to_string()
+            }
         } else {
             manifest.device_label.trim().to_string()
         },
