@@ -73,6 +73,8 @@ pub struct GatewayMetrics {
 #[serde(rename_all = "camelCase")]
 pub struct HostedServiceRecord {
     pub device_pk: String,
+    #[serde(default)]
+    pub service_pk: String,
     pub device_label: String,
     pub device_kind: String,
     pub service: String,
@@ -233,6 +235,7 @@ impl HostedServiceRecord {
     fn as_json_value(&self) -> serde_json::Value {
         json!({
             "devicePk": self.device_pk,
+            "servicePk": self.service_pk,
             "deviceLabel": self.device_label,
             "deviceKind": self.device_kind,
             "service": self.service,
@@ -417,6 +420,7 @@ mod tests {
         );
         record.hosted_services.push(HostedServiceRecord {
             device_pk: "service-pk".to_string(),
+            service_pk: "service-pk".to_string(),
             device_label: "Constitute NVR".to_string(),
             device_kind: "service".to_string(),
             service: "nvr".to_string(),
