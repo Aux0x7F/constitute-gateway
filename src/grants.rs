@@ -438,7 +438,10 @@ pub(super) async fn resolve_scope_for_request(
 ) -> Result<GrantScope> {
     if !matches!(
         (service.trim(), capability.trim()),
-        ("nvr", "nvr.view") | ("nvr", "nvr.manage") | ("nvr", "gateway.service_access")
+        ("nvr", "nvr.view")
+            | ("nvr", "nvr.manage")
+            | ("nvr", "gateway.service_access")
+            | ("logging", "logging.view")
     ) {
         return Err(anyhow!("unsupported capability"));
     }
@@ -545,7 +548,7 @@ pub(super) fn build_shared_resource_projection(
 ) -> Value {
     json!(SharedResourceProjection {
         gateway_pk: hosted.record.host_gateway_pk.clone(),
-        service_pk: hosted.record.device_pk.clone(),
+        service_pk: hosted.record.service_pk.clone(),
         service: hosted.record.service.clone(),
         service_label: hosted.record.device_label.clone(),
         service_version: hosted.record.service_version.clone(),
@@ -707,7 +710,7 @@ pub(super) async fn handle_gateway_grant_request(
             let shared_resources = match scope_for_identity(
                 ctx,
                 &req.identity_id,
-                &hosted.record.device_pk,
+                &hosted.record.service_pk,
                 &hosted.record.service,
                 &cameras,
             )
@@ -766,7 +769,7 @@ pub(super) async fn handle_gateway_grant_request(
                         .iter()
                         .filter(|grant| active_grant(grant))
                         .filter(|grant| grant.gateway_pk.trim() == ctx.self_pk.trim())
-                        .filter(|grant| grant.service_pk.trim() == hosted.record.device_pk.trim())
+                        .filter(|grant| grant.service_pk.trim() == hosted.record.service_pk.trim())
                         .filter(|grant| {
                             grant
                                 .service
@@ -908,7 +911,7 @@ pub(super) async fn handle_gateway_grant_request(
                 let existing_idx = grant_state.grants.iter().position(|grant| {
                     active_grant(grant)
                         && grant.gateway_pk.trim() == ctx.self_pk.trim()
-                        && grant.service_pk.trim() == hosted.record.device_pk.trim()
+                        && grant.service_pk.trim() == hosted.record.service_pk.trim()
                         && grant
                             .service
                             .trim()
@@ -932,7 +935,7 @@ pub(super) async fn handle_gateway_grant_request(
                         owner_identity_id: ctx.gateway_identity_id.clone(),
                         grantee_identity_id: req.grantee_identity_id.clone(),
                         gateway_pk: ctx.self_pk.clone(),
-                        service_pk: hosted.record.device_pk.clone(),
+                        service_pk: hosted.record.service_pk.clone(),
                         service: hosted.record.service.clone(),
                         view_sources: view_sources.clone(),
                         control_sources: control_sources.clone(),
@@ -994,7 +997,7 @@ pub(super) async fn handle_gateway_grant_request(
                 let mut out = None;
                 for grant in &mut grant_state.grants {
                     let matches_service = grant.gateway_pk.trim() == ctx.self_pk.trim()
-                        && grant.service_pk.trim() == hosted.record.device_pk.trim()
+                        && grant.service_pk.trim() == hosted.record.service_pk.trim()
                         && grant
                             .service
                             .trim()

@@ -4,6 +4,7 @@ use constitute_protocol::{
     LogSubjectRef, ServiceAccessCapabilityClaims, CAAC_KIND_SERVICE_ACCESS_INVOCATION,
     CAAC_KIND_SERVICE_ACCESS_REQUEST, CAAC_KIND_SERVICE_ACCESS_SIGNAL, DEFAULT_REQUEST_TTL_SECONDS,
 };
+use url::Url;
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -241,7 +242,8 @@ async fn load_hosted_nvr_service_from_manifest(
                     .unwrap_or(camera_count);
                 return Some(HostedNvrService {
                     record: discovery::HostedServiceRecord {
-                        device_pk: service_pk,
+                        device_pk: service_pk.clone(),
+                        service_pk: service_pk.clone(),
                         device_label: if manifest.device_label.trim().is_empty() {
                             "Constitute NVR".to_string()
                         } else {
@@ -285,7 +287,8 @@ async fn load_hosted_nvr_service_from_manifest(
 
     Some(HostedNvrService {
         record: discovery::HostedServiceRecord {
-            device_pk: service_pk,
+            device_pk: service_pk.clone(),
+            service_pk: service_pk.clone(),
             device_label: if manifest.device_label.trim().is_empty() {
                 "Constitute NVR".to_string()
             } else {
@@ -382,7 +385,8 @@ async fn load_hosted_nvr_service(
                         .unwrap_or(camera_count);
                     return Some(HostedNvrService {
                         record: discovery::HostedServiceRecord {
-                            device_pk: service_pk,
+                            device_pk: service_pk.clone(),
+                            service_pk: service_pk.clone(),
                             device_label: if cfg.device_label.trim().is_empty() {
                                 "Constitute NVR".to_string()
                             } else {
@@ -445,7 +449,8 @@ async fn load_hosted_nvr_service(
 
         return Some(HostedNvrService {
             record: discovery::HostedServiceRecord {
-                device_pk: service_pk,
+                device_pk: service_pk.clone(),
+                service_pk: service_pk.clone(),
                 device_label: if cfg.device_label.trim().is_empty() {
                     "Constitute NVR".to_string()
                 } else {
@@ -519,6 +524,18 @@ fn storage_local_base_url(bind: &str) -> Option<String> {
     }
     let addr: SocketAddr = raw.parse().ok()?;
     Some(format!("http://127.0.0.1:{}", addr.port()))
+}
+
+fn hosted_service_health_url(api_base_url: &str, health_url: &str) -> String {
+    let base = api_base_url.trim().trim_end_matches('/');
+    let raw = health_url.trim();
+    if raw.is_empty() {
+        return format!("{base}/health");
+    }
+    if Url::parse(raw).is_ok() {
+        return raw.to_string();
+    }
+    format!("{base}/{}", raw.trim_start_matches('/'))
 }
 
 fn storage_probe_base_urls() -> Vec<String> {
@@ -633,7 +650,7 @@ fn storage_record_from_parts(
             storage_capabilities(manifest)
         },
     });
-    if let Some(base) = api_base_url {
+    if let Some(base) = api_base_url.filter(|_| service != "logging") {
         facts["apiBaseUrl"] = json!(base);
         facts["healthUrl"] = json!(if manifest.health_url.trim().is_empty() {
             format!("{}/health", base.trim_end_matches('/'))
@@ -683,12 +700,13 @@ fn storage_record_from_parts(
             });
         }
     }
+    let manifest_service_pk = manifest.service_pk.trim().to_string();
+    let service_access_pk = manifest_service_pk.clone();
+    let record_device_pk = format!("{}:{}", service, host_gateway_pk);
+
     discovery::HostedServiceRecord {
-        device_pk: if manifest.service_pk.trim().is_empty() {
-            format!("{}:{}", service, host_gateway_pk)
-        } else {
-            manifest.service_pk.trim().to_string()
-        },
+        device_pk: record_device_pk,
+        service_pk: service_access_pk,
         device_label: if manifest.device_label.trim().is_empty() {
             if service == "logging" {
                 "Constitute Logging".to_string()
@@ -773,6 +791,61 @@ async fn load_hosted_storage_from_base_url(
     ))
 }
 
+async fn load_hosted_logging_managed_from_manifest(
+    client: &HttpClient,
+    gateway_pk: &str,
+    manifest: &HostedStorageManifest,
+) -> Option<HostedNvrService> {
+    let mut manifest = manifest.clone();
+    manifest.service = "logging".to_string();
+    if manifest.service_pk.trim().is_empty() {
+        return None;
+    }
+    let api_base_url = if !manifest.api_base_url.trim().is_empty() {
+        Some(
+            manifest
+                .api_base_url
+                .trim()
+                .trim_end_matches('/')
+                .to_string(),
+        )
+    } else {
+        storage_local_base_url(&manifest.api_bind)
+    }?;
+    let health_url = hosted_service_health_url(&api_base_url, &manifest.health_url);
+    let health = fetch_json(client, &health_url)
+        .await
+        .unwrap_or_else(|| json!({ "status": "unknown" }));
+    let record =
+        storage_record_from_parts(gateway_pk, &manifest, Some(&api_base_url), Some(&health));
+    Some(HostedNvrService {
+        record,
+        api_base_url,
+        health,
+        config: HostedNvrConfig::default(),
+    })
+}
+
+async fn load_hosted_logging_managed_from_base_url(
+    client: &HttpClient,
+    gateway_pk: &str,
+    api_base_url: &str,
+) -> Option<HostedNvrService> {
+    let base = api_base_url.trim().trim_end_matches('/').to_string();
+    if base.is_empty() {
+        return None;
+    }
+    let mut manifest = fetch_json(client, &format!("{base}/hosted-service.json"))
+        .await
+        .and_then(|body| serde_json::from_value::<HostedStorageManifest>(body).ok())
+        .unwrap_or_default();
+    manifest.service = "logging".to_string();
+    if manifest.api_base_url.trim().is_empty() {
+        manifest.api_base_url = base.clone();
+    }
+    load_hosted_logging_managed_from_manifest(client, gateway_pk, &manifest).await
+}
+
 async fn load_hosted_storage_service(
     client: &HttpClient,
     gateway_pk: &str,
@@ -803,6 +876,15 @@ async fn load_hosted_logging_service(
     client: &HttpClient,
     gateway_pk: &str,
 ) -> Option<discovery::HostedServiceRecord> {
+    load_hosted_logging_managed_service(client, gateway_pk)
+        .await
+        .map(|service| service.record)
+}
+
+async fn load_hosted_logging_managed_service(
+    client: &HttpClient,
+    gateway_pk: &str,
+) -> Option<HostedNvrService> {
     for path in logging_manifest_candidates() {
         let raw = match fs::read_to_string(&path) {
             Ok(raw) => raw,
@@ -815,14 +897,17 @@ async fn load_hosted_logging_service(
         if manifest.service.trim().is_empty() {
             manifest.service = "logging".to_string();
         }
-        if let Some(record) = load_hosted_storage_from_manifest(client, gateway_pk, &manifest).await
+        if let Some(service) =
+            load_hosted_logging_managed_from_manifest(client, gateway_pk, &manifest).await
         {
-            return Some(record);
+            return Some(service);
         }
     }
     for base in logging_probe_base_urls() {
-        if let Some(record) = load_hosted_storage_from_base_url(client, gateway_pk, &base).await {
-            return Some(record);
+        if let Some(service) =
+            load_hosted_logging_managed_from_base_url(client, gateway_pk, &base).await
+        {
+            return Some(service);
         }
     }
     None
@@ -1101,7 +1186,7 @@ fn build_managed_service_display(
         .unwrap_or_else(|| json!([]));
     json!({
         "gatewayPk": hosted.record.host_gateway_pk.clone(),
-        "servicePk": hosted.record.device_pk.clone(),
+        "servicePk": hosted.record.service_pk.clone(),
         "serviceLabel": hosted.record.device_label.clone(),
         "serviceVersion": hosted.record.service_version.clone(),
         "service": hosted.record.service.clone(),
@@ -1205,13 +1290,16 @@ pub(super) async fn load_target_hosted_service(
     service: &str,
 ) -> Result<HostedNvrService> {
     let service_slug = service.trim().to_ascii_lowercase();
-    if service_slug != "nvr" {
-        return Err(anyhow!("unsupported managed service"));
-    }
-    let hosted = load_hosted_nvr_service(&ctx.http_client, &ctx.self_pk)
-        .await
-        .ok_or_else(|| anyhow!("hosted nvr service not configured"))?;
-    if !service_pk.trim().is_empty() && hosted.record.device_pk.trim() != service_pk.trim() {
+    let hosted = match service_slug.as_str() {
+        "nvr" => load_hosted_nvr_service(&ctx.http_client, &ctx.self_pk)
+            .await
+            .ok_or_else(|| anyhow!("hosted nvr service not configured"))?,
+        "logging" => load_hosted_logging_managed_service(&ctx.http_client, &ctx.self_pk)
+            .await
+            .ok_or_else(|| anyhow!("hosted logging service not configured"))?,
+        _ => return Err(anyhow!("unsupported managed service")),
+    };
+    if !service_pk.trim().is_empty() && hosted.record.service_pk.trim() != service_pk.trim() {
         return Err(anyhow!(
             "requested service pk does not match hosted service"
         ));
@@ -1917,7 +2005,7 @@ pub(super) async fn handle_gateway_service_access_request(
         ctx,
         &requester_pk,
         &req.identity_id,
-        &hosted.record.device_pk,
+        &hosted.record.service_pk,
         &hosted.record.service,
         &req.capability,
         &cameras,
@@ -1943,7 +2031,7 @@ pub(super) async fn handle_gateway_service_access_request(
     };
 
     let mut service_access_req = req.clone();
-    service_access_req.service_pk = hosted.record.device_pk.clone();
+    service_access_req.service_pk = hosted.record.service_pk.clone();
     if service_access_req.access_nonce.is_empty() {
         service_access_req.access_nonce = random_hex(8);
     }
@@ -2185,6 +2273,174 @@ pub(super) async fn handle_gateway_signal_request(
     )
     .await;
 
+    if req.signal_type == "service_projection" {
+        if let Err(err) = grants::resolve_scope_for_request(
+            ctx,
+            &requester_pk,
+            &req.identity_id,
+            &hosted.record.service_pk,
+            &hosted.record.service,
+            &token.capability,
+            &cameras,
+        )
+        .await
+        {
+            let status = publish_status(
+                "rejected",
+                Some("projection_not_granted".to_string()),
+                Some(err.to_string()),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+
+        let Some(frame) = req.payload.get("frame").cloned() else {
+            let status = publish_status(
+                "rejected",
+                Some("missing_service_frame".to_string()),
+                Some(
+                    "service projection requests must include a service exchange frame".to_string(),
+                ),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        };
+
+        let url = format!(
+            "{}/service-exchange",
+            hosted.api_base_url.trim().trim_end_matches('/')
+        );
+        let response = ctx
+            .http_client
+            .post(&url)
+            .timeout(Duration::from_secs(45))
+            .json(&json!({
+                "serviceCapability": req.service_capability.clone(),
+                "requestId": req.request_id.clone(),
+                "frame": frame,
+            }))
+            .send()
+            .await;
+        let response = match response {
+            Ok(resp) => resp,
+            Err(err) => {
+                warn!(
+                    request_id = %req.request_id,
+                    signal_type = %req.signal_type,
+                    service = %hosted.record.service,
+                    error = %err,
+                    "gateway service exchange forward failed"
+                );
+                let status = publish_status(
+                    "failed",
+                    Some("service_exchange_failed".to_string()),
+                    Some(err.to_string()),
+                );
+                let _ = publish_gateway_signal_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
+                return;
+            }
+        };
+
+        let response_status = response.status();
+        if !response_status.is_success() {
+            let detail = match response.text().await {
+                Ok(text) if !text.trim().is_empty() => text,
+                _ => format!("status {}", response_status),
+            };
+            warn!(
+                request_id = %req.request_id,
+                signal_type = %req.signal_type,
+                service = %hosted.record.service,
+                status = %response_status,
+                "gateway service exchange rejected request"
+            );
+            let status = publish_status(
+                "failed",
+                Some("service_exchange_rejected".to_string()),
+                Some(detail),
+            );
+            let _ = publish_gateway_signal_status(
+                &ctx.relay_pool,
+                &ctx.local_relay,
+                &ctx.self_pk,
+                &ctx.self_sk,
+                &status,
+            )
+            .await;
+            return;
+        }
+
+        let body: Value = match response.json().await {
+            Ok(body) => body,
+            Err(err) => {
+                let status = publish_status(
+                    "failed",
+                    Some("invalid_service_exchange_response".to_string()),
+                    Some(err.to_string()),
+                );
+                let _ = publish_gateway_signal_status(
+                    &ctx.relay_pool,
+                    &ctx.local_relay,
+                    &ctx.self_pk,
+                    &ctx.self_sk,
+                    &status,
+                )
+                .await;
+                return;
+            }
+        };
+        let projection = body
+            .get("projection")
+            .cloned()
+            .unwrap_or_else(|| body.clone());
+        let signal = build_gateway_signal_payload(
+            &req,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            "service_projection",
+            json!({ "projection": projection }),
+        );
+        let _ = publish_gateway_signal(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &signal,
+        )
+        .await;
+        let status = publish_status("complete", None, None);
+        let _ = publish_gateway_signal_status(
+            &ctx.relay_pool,
+            &ctx.local_relay,
+            &ctx.self_pk,
+            &ctx.self_sk,
+            &status,
+        )
+        .await;
+        return;
+    }
+
     let url = match req.signal_type.as_str() {
         "offer" => format!("{}/service-access/offer", hosted.api_base_url),
         "control" => format!("{}/service-access/control", hosted.api_base_url),
@@ -2231,7 +2487,7 @@ pub(super) async fn handle_gateway_signal_request(
             ctx,
             &requester_pk,
             &req.identity_id,
-            &hosted.record.device_pk,
+            &hosted.record.service_pk,
             &hosted.record.service,
             &token.capability,
             &cameras,
@@ -2309,7 +2565,7 @@ pub(super) async fn handle_gateway_signal_request(
                 scope,
                 &req.identity_id,
                 &req.device_pk,
-                &hosted.record.device_pk,
+                &hosted.record.service_pk,
                 &source_id,
             )
             .await
@@ -2374,7 +2630,7 @@ pub(super) async fn handle_gateway_signal_request(
         map.insert("devicePk".to_string(), json!(req.device_pk.clone()));
         map.insert(
             "servicePk".to_string(),
-            json!(hosted.record.device_pk.clone()),
+            json!(hosted.record.service_pk.clone()),
         );
         map.insert("service".to_string(), json!(hosted.record.service.clone()));
     }
@@ -2383,7 +2639,7 @@ pub(super) async fn handle_gateway_signal_request(
         CAAC_KIND_SERVICE_ACCESS_INVOCATION,
         &invocation_claims,
         &ctx.self_sk,
-        std::slice::from_ref(&hosted.record.device_pk),
+        std::slice::from_ref(&hosted.record.service_pk),
         issued_at,
         issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
     ) {
@@ -2439,7 +2695,7 @@ pub(super) async fn handle_gateway_signal_request(
                     ctx,
                     &req.identity_id,
                     &req.device_pk,
-                    &hosted.record.device_pk,
+                    &hosted.record.service_pk,
                 )
                 .await;
             }
@@ -2467,7 +2723,7 @@ pub(super) async fn handle_gateway_signal_request(
                 ctx,
                 &req.identity_id,
                 &req.device_pk,
-                &hosted.record.device_pk,
+                &hosted.record.service_pk,
             )
             .await;
         }
@@ -2522,7 +2778,7 @@ pub(super) async fn handle_gateway_signal_request(
                         ctx,
                         &req.identity_id,
                         &req.device_pk,
-                        &hosted.record.device_pk,
+                        &hosted.record.service_pk,
                     )
                     .await;
                 }
@@ -2584,7 +2840,7 @@ pub(super) async fn handle_gateway_signal_request(
             ctx,
             &req.identity_id,
             &req.device_pk,
-            &hosted.record.device_pk,
+            &hosted.record.service_pk,
         )
         .await;
     }
