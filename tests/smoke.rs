@@ -376,11 +376,6 @@ async fn udp_record_gossip_zone_scoped() {
 async fn udp_record_request_by_identity() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr = tmp.local_addr().unwrap();
-    drop(tmp);
-    let bind = addr.to_string();
-
     let cfg = constitute_gateway::transport::UdpConfig {
         node_id: "node-a".to_string(),
         device_pk: "pk-a".to_string(),
@@ -398,9 +393,10 @@ async fn udp_record_request_by_identity() {
         inbound_tx: Some(tx),
     };
 
-    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+    let handle = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:0", cfg)
         .await
         .expect("start udp");
+    let bind = handle.local_addr();
 
     let msg = serde_json::json!({
         "kind": "recordrequest",
@@ -412,7 +408,7 @@ async fn udp_record_request_by_identity() {
     });
     let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let payload = serde_json::to_vec(&msg).unwrap();
-    sock.send_to(&payload, &bind).await.unwrap();
+    sock.send_to(&payload, bind).await.unwrap();
 
     let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
         .await
@@ -438,11 +434,6 @@ async fn udp_record_request_by_identity() {
 async fn udp_record_request_by_device() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr = tmp.local_addr().unwrap();
-    drop(tmp);
-    let bind = addr.to_string();
-
     let cfg = constitute_gateway::transport::UdpConfig {
         node_id: "node-b".to_string(),
         device_pk: "pk-b".to_string(),
@@ -460,9 +451,10 @@ async fn udp_record_request_by_device() {
         inbound_tx: Some(tx),
     };
 
-    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+    let handle = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:0", cfg)
         .await
         .expect("start udp");
+    let bind = handle.local_addr();
 
     let msg = serde_json::json!({
         "kind": "recordrequest",
@@ -474,7 +466,7 @@ async fn udp_record_request_by_device() {
     });
     let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let payload = serde_json::to_vec(&msg).unwrap();
-    sock.send_to(&payload, &bind).await.unwrap();
+    sock.send_to(&payload, bind).await.unwrap();
 
     let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
         .await
@@ -500,11 +492,6 @@ async fn udp_record_request_by_device() {
 async fn udp_record_request_by_dht_key() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
-    let tmp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr = tmp.local_addr().unwrap();
-    drop(tmp);
-    let bind = addr.to_string();
-
     let cfg = constitute_gateway::transport::UdpConfig {
         node_id: "node-c".to_string(),
         device_pk: "pk-c".to_string(),
@@ -522,9 +509,10 @@ async fn udp_record_request_by_dht_key() {
         inbound_tx: Some(tx),
     };
 
-    let handle = constitute_gateway::transport::start_udp_with_handle(&bind, cfg)
+    let handle = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:0", cfg)
         .await
         .expect("start udp");
+    let bind = handle.local_addr();
 
     let msg = serde_json::json!({
         "kind": "recordrequest",
@@ -537,7 +525,7 @@ async fn udp_record_request_by_dht_key() {
     });
     let sock = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
     let payload = serde_json::to_vec(&msg).unwrap();
-    sock.send_to(&payload, &bind).await.unwrap();
+    sock.send_to(&payload, bind).await.unwrap();
 
     let inbound = tokio::time::timeout(Duration::from_secs(1), rx.recv())
         .await
@@ -561,13 +549,6 @@ async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
     let (pk_a, sk_a) = constitute_gateway::nostr::generate_keypair();
     let (pk_b, _sk_b) = constitute_gateway::nostr::generate_keypair();
 
-    let tmp_a = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr_a = tmp_a.local_addr().unwrap();
-    drop(tmp_a);
-    let tmp_b = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
-    let addr_b = tmp_b.local_addr().unwrap();
-    drop(tmp_b);
-
     let (tx_a, mut rx_a) = tokio::sync::mpsc::unbounded_channel();
     let (tx_b, mut rx_b) = tokio::sync::mpsc::unbounded_channel();
 
@@ -575,7 +556,7 @@ async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
         node_id: "node-a".to_string(),
         device_pk: pk_a.clone(),
         zones: vec!["zone-a".to_string()],
-        peers: vec![addr_b.to_string()],
+        peers: vec![],
         handshake_interval: Duration::from_secs(1),
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 4096,
@@ -592,7 +573,7 @@ async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
         node_id: "node-b".to_string(),
         device_pk: pk_b,
         zones: vec!["zone-a".to_string()],
-        peers: vec![addr_a.to_string()],
+        peers: vec![],
         handshake_interval: Duration::from_secs(1),
         peer_timeout: Duration::from_secs(10),
         max_packet_bytes: 4096,
@@ -605,12 +586,14 @@ async fn udp_targeted_identity_request_roundtrip_between_two_peers() {
         inbound_tx: Some(tx_b),
     };
 
-    let handle_a = constitute_gateway::transport::start_udp_with_handle(&addr_a.to_string(), cfg_a)
+    let handle_a = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:0", cfg_a)
         .await
         .expect("start udp a");
-    let handle_b = constitute_gateway::transport::start_udp_with_handle(&addr_b.to_string(), cfg_b)
+    let handle_b = constitute_gateway::transport::start_udp_with_handle("127.0.0.1:0", cfg_b)
         .await
         .expect("start udp b");
+    handle_a.set_peers(vec![handle_b.local_addr()]).await;
+    handle_b.set_peers(vec![handle_a.local_addr()]).await;
 
     tokio::time::sleep(Duration::from_secs(2)).await;
 
