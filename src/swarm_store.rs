@@ -1,7 +1,8 @@
 //! In-memory validated store for swarm discovery records.
 //!
 //! Identity and device records are validated and indexed by zone to support
-//! targeted lookup and zone-scoped replication.
+//! targeted bootstrap lookup and zone-scoped bootstrap/fallback replication.
+//! Nostr-shaped records in this module are not semantic product routing truth.
 
 use crate::nostr;
 use serde_json::Value;
@@ -10,6 +11,7 @@ use std::collections::HashMap;
 const RECORD_KIND: u32 = 30078;
 const RECORD_TAG: &str = "swarm_discovery";
 const MAX_SKEW_SEC: u64 = 10 * 60;
+pub const SWARM_STORE_RECORD_BOUNDARY: &str = "bootstrap-fallback";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordType {

@@ -1,4 +1,4 @@
-//! Local Nostr-compatible websocket relay for browser-side clients.
+//! Local Nostr-compatible websocket relay for bootstrap/fallback browser-side clients.
 //!
 //! The local relay validates incoming events, enforces replay/rate constraints, and
 //! republishes approved events to configured upstream relays.

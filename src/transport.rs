@@ -1,7 +1,9 @@
 //! UDP transport primitives for gateway-to-gateway signaling.
 //!
 //! Includes peer handshake, zone-scoped record gossip, targeted record requests,
-//! and bounded request forwarding (fanout + max hops).
+//! and bounded request forwarding (fanout + max hops). Nostr-shaped record
+//! payloads carried here are a bootstrap/fallback lane, not semantic product
+//! routing truth.
 
 use crate::nostr::NostrEvent;
 use anyhow::Result;
@@ -27,6 +29,7 @@ const STUN_BINDING_SUCCESS: u16 = 0x0101;
 const STUN_ATTR_MAPPED_ADDRESS: u16 = 0x0001;
 const STUN_ATTR_XOR_MAPPED_ADDRESS: u16 = 0x0020;
 const UDP_PROTOCOL_VERSION: u8 = 1;
+pub const MESH_RECORD_BOUNDARY: &str = "bootstrap-fallback";
 
 #[derive(Clone, Debug, Default)]
 pub struct UdpConfig {
@@ -141,6 +144,7 @@ struct PeerInfo {
 }
 
 pub struct UdpHandle {
+    local_addr: SocketAddr,
     table: Arc<Mutex<HashMap<SocketAddr, PeerInfo>>>,
     peers: Arc<Mutex<Vec<SocketAddr>>>,
     outbound: mpsc::UnboundedSender<UdpOutbound>,
@@ -155,6 +159,10 @@ impl UdpHandle {
     #[allow(dead_code)]
     pub fn stop(self) {
         self.task.abort();
+    }
+    #[allow(dead_code)]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
     #[allow(dead_code)]
     pub fn request_max_hops(&self) -> u8 {
@@ -413,7 +421,8 @@ pub async fn start_udp(bind: &str, cfg: UdpConfig) -> Result<()> {
 
 pub async fn start_udp_with_handle(bind: &str, cfg: UdpConfig) -> Result<UdpHandle> {
     let socket = Arc::new(UdpSocket::bind(bind).await?);
-    tracing::info!(bind = %bind, "udp listener ready");
+    let local_addr = socket.local_addr()?;
+    tracing::info!(bind = %local_addr, "udp listener ready");
 
     let resolved = resolve_peers(&cfg.peers).await;
     let peers = Arc::new(Mutex::new(resolved));
@@ -430,6 +439,7 @@ pub async fn start_udp_with_handle(bind: &str, cfg: UdpConfig) -> Result<UdpHand
     });
 
     Ok(UdpHandle {
+        local_addr,
         table,
         peers,
         outbound: out_tx,
@@ -1023,6 +1033,7 @@ fn now_ms() -> u64 {
 
 #[allow(dead_code)]
 pub struct QuicHandle {
+    local_addr: SocketAddr,
     table: Arc<Mutex<HashMap<SocketAddr, PeerInfo>>>,
     peers: Arc<Mutex<Vec<SocketAddr>>>,
     outbound: mpsc::UnboundedSender<UdpOutbound>,
@@ -1037,6 +1048,11 @@ impl QuicHandle {
     #[allow(dead_code)]
     pub fn stop(self) {
         self.task.abort();
+    }
+
+    #[allow(dead_code)]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
     }
 
     #[allow(dead_code)]
@@ -1285,6 +1301,7 @@ pub async fn start_quic_with_handle(bind: &str, cfg: QuicConfig) -> Result<QuicH
     ensure_rustls_provider();
     let bind_addr = resolve_bind_addr(bind).await?;
     let mut endpoint = build_quic_server_endpoint(bind_addr)?;
+    let local_addr = endpoint.local_addr()?;
     endpoint.set_default_client_config(build_quic_client_config()?);
 
     let resolved = resolve_peers(&cfg.peers).await;
@@ -1312,6 +1329,7 @@ pub async fn start_quic_with_handle(bind: &str, cfg: QuicConfig) -> Result<QuicH
     });
 
     Ok(QuicHandle {
+        local_addr,
         table,
         peers,
         outbound: out_tx,

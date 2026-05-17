@@ -1,9 +1,5 @@
 use super::*;
-use constitute_protocol::{
-    open_envelope, seal_envelope, CaacEnvelope, LogCategory, LogOutcome, LogSeverity,
-    LogSubjectRef, ServiceAccessCapabilityClaims, CAAC_KIND_SERVICE_ACCESS_INVOCATION,
-    CAAC_KIND_SERVICE_ACCESS_REQUEST, CAAC_KIND_SERVICE_ACCESS_SIGNAL, DEFAULT_REQUEST_TTL_SECONDS,
-};
+use constitute_protocol::ServiceProjectionRequest;
 use url::Url;
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -25,6 +21,16 @@ struct HostedNvrManifest {
     api_base_url: String,
     #[serde(default)]
     health_url: String,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    surface_channel: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    nodes: Vec<Value>,
+    #[serde(default)]
+    retired: Value,
     #[serde(default)]
     camera_devices: Vec<Value>,
 }
@@ -52,6 +58,16 @@ struct HostedStorageManifest {
     app_url: String,
     #[serde(default)]
     capabilities: Vec<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    surface_channel: String,
+    #[serde(default)]
+    summary: String,
+    #[serde(default)]
+    nodes: Vec<Value>,
+    #[serde(default)]
+    retired: Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -87,61 +103,8 @@ struct HostedNvrGatewayConfig {
 #[derive(Debug, Clone)]
 pub(super) struct HostedNvrService {
     pub record: discovery::HostedServiceRecord,
-    pub api_base_url: String,
     pub health: Value,
     pub config: HostedNvrConfig,
-}
-
-type ServiceAccessTokenPayload = ServiceAccessCapabilityClaims;
-
-fn normalize_gateway_service_access_request(req: &mut GatewayServiceAccessRequest) {
-    req.request_id = trim_nonempty(&req.request_id);
-    if req.request_id.is_empty() {
-        req.request_id = make_install_request_id();
-    }
-    req.to_device_pk = trim_nonempty(&req.to_device_pk);
-    req.identity_id = trim_nonempty(&req.identity_id);
-    req.device_pk = trim_nonempty(&req.device_pk);
-    req.service_pk = trim_nonempty(&req.service_pk);
-    req.service = trim_nonempty(&req.service).to_ascii_lowercase();
-    req.capability = trim_nonempty(&req.capability).to_ascii_lowercase();
-    req.access_nonce = trim_nonempty(&req.access_nonce);
-    req.zone = trim_nonempty(&req.zone);
-    req.app_repo = trim_nonempty(&req.app_repo);
-}
-
-fn normalize_gateway_signal_request(req: &mut GatewaySignalRequest) {
-    req.request_id = trim_nonempty(&req.request_id);
-    if req.request_id.is_empty() {
-        req.request_id = make_install_request_id();
-    }
-    req.to_device_pk = trim_nonempty(&req.to_device_pk);
-    req.identity_id = trim_nonempty(&req.identity_id);
-    req.device_pk = trim_nonempty(&req.device_pk);
-    req.service_pk = trim_nonempty(&req.service_pk);
-    req.service = trim_nonempty(&req.service).to_ascii_lowercase();
-    req.signal_type = trim_nonempty(&req.signal_type).to_ascii_lowercase();
-    req.service_capability = trim_nonempty(&req.service_capability);
-}
-
-pub(super) fn gateway_offer_candidates(payload: &Value) -> Value {
-    let mut items = Vec::new();
-    let mut push_array = |value: Option<&Value>| {
-        if let Some(Value::Array(candidates)) = value {
-            for candidate in candidates {
-                if !items.contains(candidate) {
-                    items.push(candidate.clone());
-                }
-            }
-        }
-    };
-    push_array(payload.get("candidates"));
-    push_array(
-        payload
-            .get("offer")
-            .and_then(|value| value.get("candidates")),
-    );
-    Value::Array(items)
 }
 
 fn nvr_config_candidates() -> Vec<PathBuf> {
@@ -183,6 +146,218 @@ fn nvr_local_base_url(bind: &str) -> Option<String> {
     }
     let addr: SocketAddr = raw.parse().ok()?;
     Some(format!("http://127.0.0.1:{}", addr.port()))
+}
+
+fn object_string(value: &Value, keys: &[&str]) -> Option<String> {
+    let object = value.as_object()?;
+    for key in keys {
+        let text = object
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        if let Some(text) = text {
+            return Some(text.to_string());
+        }
+    }
+    None
+}
+
+fn object_bool(value: &Value, keys: &[&str]) -> Option<bool> {
+    let object = value.as_object()?;
+    for key in keys {
+        if let Some(next) = object.get(*key).and_then(Value::as_bool) {
+            return Some(next);
+        }
+    }
+    None
+}
+
+fn object_u64(value: &Value, keys: &[&str]) -> Option<u64> {
+    let object = value.as_object()?;
+    for key in keys {
+        if let Some(next) = object.get(*key).and_then(Value::as_u64) {
+            return Some(next);
+        }
+    }
+    None
+}
+
+fn push_unique_source_id(out: &mut Vec<String>, source_id: &str) {
+    let source_id = source_id.trim();
+    if source_id.is_empty() || out.iter().any(|existing| existing == source_id) {
+        return;
+    }
+    out.push(source_id.to_string());
+}
+
+fn sanitize_nvr_camera_device(camera: &Value) -> Option<Value> {
+    let source_id = object_string(camera, &["sourceId", "source_id", "id"])?;
+    let mut safe = serde_json::Map::new();
+    safe.insert("sourceId".to_string(), json!(source_id));
+
+    if let Some(name) = object_string(camera, &["name", "displayName", "display_name", "label"]) {
+        safe.insert("name".to_string(), json!(name.clone()));
+        safe.insert("displayName".to_string(), json!(name));
+    }
+    if let Some(driver_id) = object_string(camera, &["driverId", "driver_id"]) {
+        safe.insert("driverId".to_string(), json!(driver_id));
+    }
+    if let Some(vendor) = object_string(camera, &["vendor"]) {
+        safe.insert("vendor".to_string(), json!(vendor));
+    }
+    if let Some(model) = object_string(camera, &["model"]) {
+        safe.insert("model".to_string(), json!(model));
+    }
+    if let Some(enabled) = object_bool(camera, &["enabled"]) {
+        safe.insert("enabled".to_string(), json!(enabled));
+    }
+    if let Some(rtsp_configured) = object_bool(camera, &["rtspConfigured", "rtsp_configured"]) {
+        safe.insert("rtspConfigured".to_string(), json!(rtsp_configured));
+    }
+    if let Some(onvif_host) = object_string(camera, &["onvifHost", "onvif_host"]) {
+        safe.insert("onvifHost".to_string(), json!(onvif_host));
+    }
+    if let Some(onvif_port) = object_u64(camera, &["onvifPort", "onvif_port"]) {
+        safe.insert("onvifPort".to_string(), json!(onvif_port));
+    }
+    if let Some(segment_secs) = object_u64(camera, &["segmentSecs", "segment_secs"]) {
+        safe.insert("segmentSecs".to_string(), json!(segment_secs));
+    }
+    if let Some(ptz_capable) = object_bool(camera, &["ptzCapable", "ptz_capable"]) {
+        safe.insert("ptzCapable".to_string(), json!(ptz_capable));
+    }
+
+    Some(Value::Object(safe))
+}
+
+fn sanitized_nvr_camera_devices(health: Option<&Value>, fallback: &[Value]) -> Vec<Value> {
+    let from_health = health
+        .and_then(|body| body.get("cameraDevices"))
+        .and_then(Value::as_array)
+        .map(|entries| entries.as_slice())
+        .unwrap_or(&[]);
+    let source = if from_health.is_empty() {
+        fallback
+    } else {
+        from_health
+    };
+    source
+        .iter()
+        .filter_map(sanitize_nvr_camera_device)
+        .collect()
+}
+
+fn nvr_source_ids(health: Option<&Value>, camera_devices: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    if let Some(entries) = health
+        .and_then(|body| body.get("sources"))
+        .and_then(Value::as_array)
+    {
+        for entry in entries {
+            if let Some(source_id) = entry.as_str() {
+                push_unique_source_id(&mut out, source_id);
+            }
+        }
+    }
+    for camera in camera_devices {
+        if let Some(source_id) = camera.get("sourceId").and_then(Value::as_str) {
+            push_unique_source_id(&mut out, source_id);
+        }
+    }
+    out
+}
+
+fn nvr_safe_media_projection(health: &Value) -> Option<Value> {
+    let media = health.get("mediaProjection")?.as_object()?;
+    let mut safe = serde_json::Map::new();
+    if let Some(state) = media
+        .get("state")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|state| !state.is_empty())
+    {
+        safe.insert("state".to_string(), json!(state));
+    }
+    if let Some(enabled) = media.get("enabled").and_then(Value::as_bool) {
+        safe.insert("enabled".to_string(), json!(enabled));
+    }
+    if safe.is_empty() {
+        None
+    } else {
+        Some(Value::Object(safe))
+    }
+}
+
+fn nvr_base_facts(
+    camera_count: u64,
+    health: Option<&Value>,
+    fallback_camera_devices: &[Value],
+) -> Value {
+    let camera_devices = sanitized_nvr_camera_devices(health, fallback_camera_devices);
+    let sources = nvr_source_ids(health, &camera_devices);
+    let mut facts = json!({
+        "configuredSources": camera_count,
+    });
+    if !sources.is_empty() {
+        facts["sources"] = json!(sources);
+    }
+    if !camera_devices.is_empty() {
+        facts["cameraDevices"] = json!(camera_devices);
+    }
+    if let Some(health) = health {
+        let mut safe_health = serde_json::Map::new();
+        if let Some(status) = health
+            .get("status")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|status| !status.is_empty())
+        {
+            safe_health.insert("status".to_string(), json!(status));
+        }
+        if let Some(ok) = health.get("ok").and_then(Value::as_bool) {
+            safe_health.insert("ok".to_string(), json!(ok));
+        }
+        safe_health.insert("configuredSources".to_string(), json!(camera_count));
+        if !sources.is_empty() {
+            safe_health.insert("sources".to_string(), json!(sources.clone()));
+        }
+        if !camera_devices.is_empty() {
+            safe_health.insert("cameraDevices".to_string(), json!(camera_devices.clone()));
+        }
+        if let Some(media_projection) = nvr_safe_media_projection(health) {
+            facts["mediaProjection"] = media_projection.clone();
+            safe_health.insert("mediaProjection".to_string(), media_projection);
+        }
+        if !safe_health.is_empty() {
+            facts["health"] = Value::Object(safe_health);
+        }
+    }
+    facts
+}
+
+fn nvr_manifest_facts(
+    manifest: &HostedNvrManifest,
+    camera_count: u64,
+    health: Option<&Value>,
+) -> Value {
+    let mut facts = nvr_base_facts(camera_count, health, &manifest.camera_devices);
+    if !manifest.surface_channel.trim().is_empty() {
+        facts["surfaceChannel"] = json!(manifest.surface_channel.trim());
+    }
+    if !manifest.aliases.is_empty() {
+        facts["aliases"] = json!(manifest.aliases.clone());
+    }
+    if !manifest.summary.trim().is_empty() {
+        facts["summary"] = json!(manifest.summary.trim());
+    }
+    if !manifest.nodes.is_empty() {
+        facts["nodes"] = json!(manifest.nodes.clone());
+    }
+    if !manifest.retired.is_null() {
+        facts["retired"] = manifest.retired.clone();
+    }
+    facts
 }
 
 async fn load_hosted_nvr_service_from_manifest(
@@ -269,11 +444,8 @@ async fn load_hosted_nvr_service_from_manifest(
                         freshness_ms: 0,
                         status,
                         camera_count,
-                        facts: json!({
-                            "configuredSources": camera_count,
-                        }),
+                        facts: nvr_manifest_facts(manifest, camera_count, Some(&health)),
                     },
-                    api_base_url,
                     health,
                     config: fallback_cfg,
                 });
@@ -314,11 +486,8 @@ async fn load_hosted_nvr_service_from_manifest(
             freshness_ms: 0,
             status,
             camera_count,
-            facts: json!({
-                "configuredSources": camera_count,
-            }),
+            facts: nvr_manifest_facts(manifest, camera_count, None),
         },
-        api_base_url,
         health: json!({}),
         config: fallback_cfg,
     })
@@ -417,11 +586,8 @@ async fn load_hosted_nvr_service(
                             freshness_ms: 0,
                             status,
                             camera_count,
-                            facts: json!({
-                                "configuredSources": camera_count,
-                            }),
+                            facts: nvr_base_facts(camera_count, Some(&health), &cfg.camera_devices),
                         },
-                        api_base_url,
                         health,
                         config: cfg.clone(),
                     });
@@ -468,11 +634,8 @@ async fn load_hosted_nvr_service(
                 freshness_ms: 0,
                 status,
                 camera_count,
-                facts: json!({
-                    "configuredSources": camera_count,
-                }),
+                facts: nvr_base_facts(camera_count, None, &cfg.camera_devices),
             },
-            api_base_url,
             health: json!({}),
             config: cfg.clone(),
         });
@@ -650,6 +813,21 @@ fn storage_record_from_parts(
             storage_capabilities(manifest)
         },
     });
+    if !manifest.surface_channel.trim().is_empty() {
+        facts["surfaceChannel"] = json!(manifest.surface_channel.trim());
+    }
+    if !manifest.aliases.is_empty() {
+        facts["aliases"] = json!(manifest.aliases.clone());
+    }
+    if !manifest.summary.trim().is_empty() {
+        facts["summary"] = json!(manifest.summary.trim());
+    }
+    if !manifest.nodes.is_empty() {
+        facts["nodes"] = json!(manifest.nodes.clone());
+    }
+    if !manifest.retired.is_null() {
+        facts["retired"] = manifest.retired.clone();
+    }
     if let Some(base) = api_base_url.filter(|_| service != "logging") {
         facts["apiBaseUrl"] = json!(base);
         facts["healthUrl"] = json!(if manifest.health_url.trim().is_empty() {
@@ -701,12 +879,12 @@ fn storage_record_from_parts(
         }
     }
     let manifest_service_pk = manifest.service_pk.trim().to_string();
-    let service_access_pk = manifest_service_pk.clone();
+    let service_member_pk = manifest_service_pk.clone();
     let record_device_pk = format!("{}:{}", service, host_gateway_pk);
 
     discovery::HostedServiceRecord {
         device_pk: record_device_pk,
-        service_pk: service_access_pk,
+        service_pk: service_member_pk,
         device_label: if manifest.device_label.trim().is_empty() {
             if service == "logging" {
                 "Constitute Logging".to_string()
@@ -820,7 +998,6 @@ async fn load_hosted_logging_managed_from_manifest(
         storage_record_from_parts(gateway_pk, &manifest, Some(&api_base_url), Some(&health));
     Some(HostedNvrService {
         record,
-        api_base_url,
         health,
         config: HostedNvrConfig::default(),
     })
@@ -958,73 +1135,6 @@ async fn is_requester_authorized_for_service_install(
     }
 }
 
-fn build_service_access_capability(
-    gateway_sk_hex: &str,
-    payload: &ServiceAccessTokenPayload,
-) -> Result<String> {
-    let claims = serde_json::to_value(payload)?;
-    let recipients = vec![payload.gateway_pk.clone(), payload.service_pk.clone()];
-    let envelope = seal_envelope(
-        constitute_protocol::CAAC_KIND_SERVICE_ACCESS_CAPABILITY,
-        &claims,
-        gateway_sk_hex,
-        &recipients,
-        payload.issued_at,
-        payload.expires_at,
-    )?;
-    Ok(serde_json::to_string(&envelope)?)
-}
-
-fn parse_service_access_capability(
-    capability: &str,
-    recipient_sk: &str,
-    now_ms: u64,
-) -> Result<(CaacEnvelope, ServiceAccessTokenPayload)> {
-    let envelope: CaacEnvelope =
-        serde_json::from_str(capability).context("invalid service capability envelope json")?;
-    let claims = open_envelope(&envelope, recipient_sk, now_ms, None)?;
-    let payload: ServiceAccessTokenPayload =
-        serde_json::from_value(claims).context("invalid service capability claims")?;
-    Ok((envelope, payload))
-}
-
-async fn publish_service_access_status_for_request(
-    ctx: &InboundContext,
-    req: &GatewayServiceAccessRequest,
-    status: &str,
-    service_capability: Option<String>,
-    expires_at: Option<u64>,
-    display: Option<Value>,
-    reason: Option<String>,
-    detail: Option<String>,
-) {
-    let payload = match build_gateway_service_access_status_payload(
-        req,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        status,
-        service_capability,
-        expires_at,
-        display,
-        reason,
-        detail,
-    ) {
-        Ok(payload) => payload,
-        Err(err) => {
-            warn!(error = %err, "failed to seal service access status");
-            return;
-        }
-    };
-    let _ = publish_gateway_service_access_status(
-        &ctx.relay_pool,
-        &ctx.local_relay,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        &payload,
-    )
-    .await;
-}
-
 async fn publish_gateway_service_install_status(
     relay_pool: &relay::RelayPool,
     local_relay: &Option<local_relay::LocalRelayHandle>,
@@ -1065,150 +1175,6 @@ async fn publish_gateway_zone_sync_status(
         }
     }
     Ok(())
-}
-
-async fn publish_gateway_service_access_status(
-    relay_pool: &relay::RelayPool,
-    local_relay: &Option<local_relay::LocalRelayHandle>,
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &GatewayServiceAccessStatusPayload,
-) -> Result<()> {
-    if pubkey.is_empty() || sk_hex.is_empty() {
-        return Ok(());
-    }
-    debug!(
-        gateway_pk = %payload.gateway_pk,
-        to_device_pk = %payload.to_device_pk,
-        envelope_id = %payload.status_envelope.envelope_id,
-        "publishing sealed service access status"
-    );
-    let value = serde_json::to_value(payload)?;
-    let ev = build_app_event(pubkey, sk_hex, &value)?;
-    relay_pool.broadcast(&nostr::frame_event(&ev));
-    if let Some(local) = local_relay.as_ref() {
-        if let Ok(val) = serde_json::to_value(ev) {
-            local.publish_event(val).await;
-        }
-    }
-    Ok(())
-}
-
-async fn publish_gateway_signal_status(
-    relay_pool: &relay::RelayPool,
-    local_relay: &Option<local_relay::LocalRelayHandle>,
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &GatewaySignalStatusPayload,
-) -> Result<()> {
-    if pubkey.is_empty() || sk_hex.is_empty() {
-        return Ok(());
-    }
-    debug!(
-        gateway_pk = %payload.gateway_pk,
-        to_device_pk = %payload.to_device_pk,
-        envelope_id = %payload.status_envelope.envelope_id,
-        "publishing sealed service signal status"
-    );
-    let value = serde_json::to_value(payload)?;
-    let ev = build_app_event(pubkey, sk_hex, &value)?;
-    relay_pool.broadcast(&nostr::frame_event(&ev));
-    if let Some(local) = local_relay.as_ref() {
-        if let Ok(val) = serde_json::to_value(ev) {
-            local.publish_event(val).await;
-        }
-    }
-    Ok(())
-}
-
-async fn publish_gateway_signal(
-    relay_pool: &relay::RelayPool,
-    local_relay: &Option<local_relay::LocalRelayHandle>,
-    pubkey: &str,
-    sk_hex: &str,
-    payload: &GatewaySignalPayload,
-) -> Result<()> {
-    if pubkey.is_empty() || sk_hex.is_empty() {
-        return Ok(());
-    }
-    let value = serde_json::to_value(payload)?;
-    let ev = build_app_event(pubkey, sk_hex, &value)?;
-    relay_pool.broadcast(&nostr::frame_event(&ev));
-    if let Some(local) = local_relay.as_ref() {
-        if let Ok(val) = serde_json::to_value(ev) {
-            local.publish_event(val).await;
-        }
-    }
-    Ok(())
-}
-
-fn build_managed_service_display(
-    hosted: &HostedNvrService,
-    req: &GatewayServiceAccessRequest,
-    scope: &grants::GrantScope,
-    stun_servers: &[String],
-    turn_servers: &[String],
-) -> Value {
-    let fallback_sources = {
-        let live = service_sources_from_health(&hosted.health);
-        if live.is_empty() {
-            service_sources_from_config(&hosted.config.camera_devices)
-        } else {
-            live
-        }
-    };
-    let sources = if scope.view_sources.is_empty() {
-        fallback_sources
-    } else {
-        scope.view_sources.clone()
-    };
-    let source_runtime = hosted
-        .health
-        .get("sourceRuntime")
-        .and_then(|value| value.as_array())
-        .map(|entries| {
-            Value::Array(
-                entries
-                    .iter()
-                    .filter(|entry| {
-                        let source_id = entry
-                            .get("sourceId")
-                            .or_else(|| entry.get("source_id"))
-                            .and_then(|value| value.as_str())
-                            .unwrap_or("")
-                            .trim();
-                        !source_id.is_empty() && sources.iter().any(|allowed| allowed == source_id)
-                    })
-                    .cloned()
-                    .collect(),
-            )
-        })
-        .unwrap_or_else(|| json!([]));
-    json!({
-        "gatewayPk": hosted.record.host_gateway_pk.clone(),
-        "servicePk": hosted.record.service_pk.clone(),
-        "serviceLabel": hosted.record.device_label.clone(),
-        "serviceVersion": hosted.record.service_version.clone(),
-        "service": hosted.record.service.clone(),
-        "status": hosted.record.status.clone(),
-        "cameraCount": sources.len(),
-        "sources": sources,
-        "cameras": scope.cameras.clone(),
-        "sourceRuntime": source_runtime,
-        "configuredSources": hosted.health.get("configuredSources").cloned().unwrap_or_else(|| json!(hosted.record.camera_count)),
-        "grantedScope": {
-            "owner": scope.owner,
-            "viewSources": scope.view_sources.clone(),
-            "controlSources": scope.control_sources.clone(),
-            "grantIds": scope.grant_ids.clone(),
-        },
-        "iceServers": {
-            "stun": stun_servers,
-            "turn": turn_servers,
-        },
-        "appRepo": req.app_repo.clone(),
-        "requestDisplay": req.display.clone(),
-    })
 }
 
 pub(super) fn camera_resources_from_hosted(
@@ -1305,37 +1271,6 @@ pub(super) async fn load_target_hosted_service(
         ));
     }
     Ok(hosted)
-}
-
-fn validate_service_access_capability_for_request(
-    ctx: &InboundContext,
-    req: &GatewaySignalRequest,
-) -> Result<ServiceAccessTokenPayload> {
-    let now_ms = util::now_unix_seconds() * 1000;
-    let (envelope, token) =
-        parse_service_access_capability(&req.service_capability, &ctx.self_sk, now_ms)?;
-    if envelope.issuer_pk.trim() != ctx.self_pk.trim() {
-        return Err(anyhow!("service capability not issued by this gateway"));
-    }
-    if token.expires_at < now_ms {
-        return Err(anyhow!("service capability expired"));
-    }
-    if token.gateway_pk.trim() != ctx.self_pk.trim() {
-        return Err(anyhow!("service capability gateway mismatch"));
-    }
-    if token.identity_id.trim() != req.identity_id.trim() {
-        return Err(anyhow!("service capability identity mismatch"));
-    }
-    if token.device_pk.trim() != req.device_pk.trim() {
-        return Err(anyhow!("service capability device mismatch"));
-    }
-    if token.service_pk.trim() != req.service_pk.trim() {
-        return Err(anyhow!("service capability service mismatch"));
-    }
-    if token.service.trim() != req.service.trim() {
-        return Err(anyhow!("service capability service slug mismatch"));
-    }
-    Ok(token)
 }
 
 pub(super) async fn handle_gateway_service_install_request(
@@ -1487,8 +1422,8 @@ pub(super) async fn handle_gateway_service_install_request(
     if req.swarm_peers.is_empty() {
         req.swarm_peers.push("127.0.0.1:4040".to_string());
     }
-    if req.public_ws_url.is_empty() {
-        req.public_ws_url = "ws://127.0.0.1:8456/session".to_string();
+    if req.swarm_edge_endpoint.is_empty() {
+        req.swarm_edge_endpoint = "ws://127.0.0.1:7448".to_string();
     }
     if !req.authorized_device_pks.contains(&requester_pk) {
         req.authorized_device_pks.push(requester_pk.clone());
@@ -1876,982 +1811,315 @@ pub(super) async fn handle_gateway_zone_sync_request(
     }
 }
 
-pub(super) async fn handle_gateway_service_access_request(
+fn gateway_projection_base(
     ctx: &InboundContext,
-    nostr_ev: &nostr::NostrEvent,
-    payload: &Value,
-) {
-    let request_envelope: CaacEnvelope = match payload
-        .get("requestEnvelope")
-        .cloned()
-        .map(serde_json::from_value)
-    {
-        Some(Ok(envelope)) => envelope,
-        Some(Err(err)) => {
-            warn!(error = %err, "invalid service access request envelope");
-            return;
-        }
-        None => {
-            warn!("rejecting service access request without CAAC envelope");
-            return;
-        }
-    };
-    if request_envelope.kind != CAAC_KIND_SERVICE_ACCESS_REQUEST {
-        warn!(kind = %request_envelope.kind, "rejecting unexpected service access envelope kind");
-        return;
-    }
-    if request_envelope.issuer_pk.trim() != nostr_ev.pubkey.trim() {
-        warn!("rejecting service access request with event/envelope issuer mismatch");
-        return;
-    }
-    let now_ms = util::now_unix_seconds() * 1000;
-    let claims = {
-        let mut replay = ctx.caac_replay.lock().await;
-        match open_envelope(&request_envelope, &ctx.self_sk, now_ms, Some(&mut *replay)) {
-            Ok(claims) => claims,
-            Err(err) => {
-                warn!(error = %err, "service access request envelope rejected");
-                return;
-            }
-        }
-    };
-    let mut req: GatewayServiceAccessRequest = match serde_json::from_value(claims) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "invalid gateway_service_access_request claims");
-            return;
-        }
-    };
-    normalize_gateway_service_access_request(&mut req);
-
-    if req.to_device_pk != ctx.self_pk {
-        return;
-    }
-
-    if req.service.is_empty() {
-        req.service = "nvr".to_string();
-    }
-    if req.capability.is_empty() {
-        req.capability = "nvr.view".to_string();
-    }
-    if req.app_repo.is_empty() {
-        req.app_repo = "constitute-nvr-ui".to_string();
-    }
-
-    let requester_pk = nostr_ev.pubkey.trim().to_string();
-    if req.device_pk.is_empty() {
-        req.device_pk = requester_pk.clone();
-    }
-
-    debug!(
-        request_id = %req.request_id,
-        requester_pk = %requester_pk,
-        target_gateway_pk = %req.to_device_pk,
-        "received sealed service access request"
-    );
-    crate::logging_surface::submit_safe_event(
-        &ctx.http_client,
-        "managed",
-        LogCategory::ServiceAccess,
-        LogSeverity::Info,
-        LogOutcome::Observed,
-        LogSubjectRef {
-            kind: "service".to_string(),
-            id: Some(req.service.clone()),
-            display: Some(req.app_repo.clone()),
+    req: &ServiceProjectionRequest,
+    payload_schema: &str,
+    payload: Value,
+    safe_facts: Value,
+) -> Value {
+    let now = util::now_unix_seconds();
+    let scope = req
+        .policy
+        .as_ref()
+        .and_then(|policy| serde_json::to_value(policy).ok())
+        .unwrap_or_else(|| json!({}));
+    json!({
+        "requestId": req.request_id.clone(),
+        "channelId": req.channel_id.clone(),
+        "service": "gateway",
+        "servicePk": ctx.self_pk.clone(),
+        "producer": {
+            "service": "gateway",
+            "component": "service-surface",
+            "gatewayPk": ctx.self_pk.clone(),
         },
-        &["gateway", "service_access"],
-        json!({
-            "service": req.service.clone(),
-            "appRepo": req.app_repo.clone(),
-        }),
-    )
-    .await;
-
-    if requester_pk != req.device_pk {
-        publish_service_access_status_for_request(
-            ctx,
-            &req,
-            "rejected",
-            None,
-            None,
-            None,
-            Some("requester_device_mismatch".to_string()),
-            Some("requesting event pubkey does not match devicePk".to_string()),
-        )
-        .await;
-        return;
-    }
-
-    let hosted = match load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
-        Ok(service) => service,
-        Err(err) => {
-            publish_service_access_status_for_request(
-                ctx,
-                &req,
-                "failed",
-                None,
-                None,
-                None,
-                Some("service_unavailable".to_string()),
-                Some(err.to_string()),
-            )
-            .await;
-            return;
-        }
-    };
-    let cameras = camera_resources_from_hosted(&hosted);
-    let scope = match grants::resolve_scope_for_request(
-        ctx,
-        &requester_pk,
-        &req.identity_id,
-        &hosted.record.service_pk,
-        &hosted.record.service,
-        &req.capability,
-        &cameras,
-    )
-    .await
-    {
-        Ok(scope) => scope,
-        Err(err) => {
-            let detail = err.to_string();
-            publish_service_access_status_for_request(
-                ctx,
-                &req,
-                "rejected",
-                None,
-                None,
-                None,
-                Some("service_access_not_granted".to_string()),
-                Some(detail),
-            )
-            .await;
-            return;
-        }
-    };
-
-    let mut service_access_req = req.clone();
-    service_access_req.service_pk = hosted.record.service_pk.clone();
-    if service_access_req.access_nonce.is_empty() {
-        service_access_req.access_nonce = random_hex(8);
-    }
-
-    let issued_at = util::now_unix_seconds() * 1000;
-    let expires_at = issued_at + 120_000;
-    let token_payload = ServiceAccessTokenPayload {
-        capability_id: format!("cap-{}", random_hex(8)),
-        gateway_pk: ctx.self_pk.clone(),
-        service_pk: service_access_req.service_pk.clone(),
-        service: service_access_req.service.clone(),
-        identity_id: service_access_req.identity_id.clone(),
-        device_pk: service_access_req.device_pk.clone(),
-        capability: service_access_req.capability.clone(),
-        owner: scope.owner,
-        view_sources: scope.view_sources.clone(),
-        control_sources: scope.control_sources.clone(),
-        nonce: service_access_req.access_nonce.clone(),
-        issued_at,
-        expires_at,
-    };
-    let service_capability = match build_service_access_capability(&ctx.self_sk, &token_payload) {
-        Ok(token) => token,
-        Err(err) => {
-            publish_service_access_status_for_request(
-                ctx,
-                &req,
-                "failed",
-                None,
-                None,
-                None,
-                Some("token_build_failed".to_string()),
-                Some(err.to_string()),
-            )
-            .await;
-            return;
-        }
-    };
-
-    let display = build_managed_service_display(
-        &hosted,
-        &service_access_req,
-        &scope,
-        &ctx.stun_servers,
-        &ctx.turn_servers,
-    );
-    publish_service_access_status_for_request(
-        ctx,
-        &service_access_req,
-        "complete",
-        Some(service_capability),
-        Some(expires_at),
-        Some(display),
-        None,
-        None,
-    )
-    .await;
+        "freshness": {
+            "state": "fresh",
+            "updatedAt": now,
+            "staleAfter": now + 60,
+        },
+        "scope": scope,
+        "payloadSchema": payload_schema,
+        "payload": payload,
+        "safeFacts": safe_facts,
+        "encryptedDetailRefs": [],
+        "diagnostics": [],
+    })
 }
 
-pub(super) async fn handle_gateway_signal_request(
-    ctx: &InboundContext,
-    nostr_ev: &nostr::NostrEvent,
-    payload: &Value,
-) {
-    let request_envelope: CaacEnvelope = match payload
-        .get("requestEnvelope")
-        .cloned()
-        .map(serde_json::from_value)
-    {
-        Some(Ok(envelope)) => envelope,
-        Some(Err(err)) => {
-            warn!(error = %err, "invalid service signal request envelope");
-            return;
-        }
-        None => {
-            warn!("rejecting service signal request without CAAC envelope");
-            return;
-        }
-    };
-    if request_envelope.kind != CAAC_KIND_SERVICE_ACCESS_SIGNAL {
-        warn!(kind = %request_envelope.kind, "rejecting unexpected service signal envelope kind");
-        return;
-    }
-    if request_envelope.issuer_pk.trim() != nostr_ev.pubkey.trim() {
-        warn!("rejecting service signal request with event/envelope issuer mismatch");
-        return;
-    }
-    let now_ms = util::now_unix_seconds() * 1000;
-    let claims = {
-        let mut replay = ctx.caac_replay.lock().await;
-        match open_envelope(&request_envelope, &ctx.self_sk, now_ms, Some(&mut *replay)) {
-            Ok(claims) => claims,
-            Err(err) => {
-                warn!(error = %err, "service signal request envelope rejected");
-                return;
-            }
-        }
-    };
-    let mut req: GatewaySignalRequest = match serde_json::from_value(claims) {
-        Ok(req) => req,
-        Err(err) => {
-            warn!(error = %err, "invalid gateway_service_signal_request claims");
-            return;
-        }
-    };
-    normalize_gateway_signal_request(&mut req);
-
-    if req.to_device_pk != ctx.self_pk {
-        return;
-    }
-
-    if req.service.is_empty() {
-        req.service = "nvr".to_string();
-    }
-    let requester_pk = nostr_ev.pubkey.trim().to_string();
-    if req.device_pk.is_empty() {
-        req.device_pk = requester_pk.clone();
-    }
-
-    debug!(
-        request_id = %req.request_id,
-        requester_pk = %requester_pk,
-        target_gateway_pk = %req.to_device_pk,
-        signal_type = %req.signal_type,
-        "received sealed gateway service signal request"
-    );
-    crate::logging_surface::submit_safe_event(
-        &ctx.http_client,
-        "managed",
-        LogCategory::ServiceSignal,
-        LogSeverity::Info,
-        LogOutcome::Observed,
-        LogSubjectRef {
-            kind: "service".to_string(),
-            id: Some(req.service.clone()),
-            display: Some(req.service.clone()),
-        },
-        &["gateway", "service_signal"],
+async fn gateway_surface_projection(ctx: &InboundContext, req: &ServiceProjectionRequest) -> Value {
+    let now = util::now_unix_seconds();
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.service.surface.v1",
         json!({
-            "service": req.service.clone(),
-            "signalType": req.signal_type.clone(),
+            "surface": {
+                "surfaceId": "gateway.surface",
+                "schemaVersion": 1,
+                "service": "gateway",
+                "servicePk": ctx.self_pk.clone(),
+                "hostGatewayPk": ctx.self_pk.clone(),
+                "location": {
+                    "locationId": ctx.self_pk.clone(),
+                    "label": "Gateway",
+                    "gatewayPk": ctx.self_pk.clone(),
+                },
+                "aliases": ["Gateway"],
+                "summary": "Gateway routing, hosted-service, zone, and device observation.",
+                "healthNode": "health",
+                "updatedAt": now,
+                "nodes": [
+                    {
+                        "nodeId": "gateway.health",
+                        "path": "health",
+                        "label": "Health",
+                        "description": "Gateway one-line and detailed runtime health.",
+                        "backingChannel": "gateway.health",
+                        "fields": [
+                            { "fieldId": "status", "label": "Status", "valueKind": "string", "capabilities": ["read", "observe"] },
+                            { "fieldId": "zones", "label": "Zones", "valueKind": "array", "capabilities": ["read", "observe"] },
+                            { "fieldId": "hostedServiceCount", "label": "Hosted Services", "valueKind": "number", "capabilities": ["read", "observe"] }
+                        ]
+                    },
+                    {
+                        "nodeId": "gateway.devices",
+                        "path": "devices",
+                        "label": "Devices",
+                        "description": "Zone-scoped device presence observed by this gateway.",
+                        "backingChannel": "gateway.devices",
+                        "fields": [
+                            { "fieldId": "devices", "label": "Devices", "valueKind": "array", "capabilities": ["read", "observe"] }
+                        ]
+                    },
+                    {
+                        "nodeId": "gateway.hostedServices",
+                        "path": "hostedServices",
+                        "label": "Hosted Services",
+                        "description": "Hosted service bootstrap descriptors and freshness.",
+                        "backingChannel": "gateway.hostedServices",
+                        "fields": [
+                            { "fieldId": "services", "label": "Services", "valueKind": "array", "capabilities": ["read", "observe"] }
+                        ]
+                    },
+                    {
+                        "nodeId": "gateway.zones",
+                        "path": "zones",
+                        "label": "Zones",
+                        "description": "Gateway zone membership.",
+                        "backingChannel": "gateway.zones",
+                        "fields": [
+                            { "fieldId": "zones", "label": "Zones", "valueKind": "array", "capabilities": ["read", "observe"] }
+                        ]
+                    },
+                    {
+                        "nodeId": "gateway.routingDiagnostics",
+                        "path": "routingDiagnostics",
+                        "label": "Routing Diagnostics",
+                        "description": "Safe routing and relay diagnostics.",
+                        "backingChannel": "gateway.routingDiagnostics",
+                        "fields": [
+                            { "fieldId": "relayConfigured", "label": "Relay Configured", "valueKind": "boolean", "capabilities": ["read", "observe"] },
+                            { "fieldId": "localRelayClients", "label": "Local Relay Clients", "valueKind": "number", "capabilities": ["read", "observe"] }
+                        ]
+                    }
+                ],
+                "diagnostics": []
+            }
+        }),
+        json!({
+            "nodeCount": 5,
+            "surfaceChannel": "gateway.surface",
         }),
     )
-    .await;
+}
 
-    let publish_status = |status: &str, reason: Option<String>, detail: Option<String>| {
-        build_gateway_signal_status_payload(
-            &req,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            status,
-            reason,
-            detail,
-        )
-    };
-
-    if requester_pk != req.device_pk {
-        let status = publish_status(
-            "rejected",
-            Some("requester_device_mismatch".to_string()),
-            Some("requesting event pubkey does not match devicePk".to_string()),
-        );
-        let _ = publish_gateway_signal_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let token = match validate_service_access_capability_for_request(ctx, &req) {
-        Ok(token) => token,
-        Err(err) => {
-            let status = publish_status(
-                "rejected",
-                Some("invalid_service_capability".to_string()),
-                Some(err.to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-
-    if !grants::requester_matches_identity(ctx, &requester_pk, &req.identity_id).await {
-        let status = publish_status(
-            "rejected",
-            Some("unauthorized_requester".to_string()),
-            Some("requester is not authorized for this identity".to_string()),
-        );
-        let _ = publish_gateway_signal_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let hosted = match load_target_hosted_service(ctx, &req.service_pk, &req.service).await {
-        Ok(service) => service,
-        Err(err) => {
-            let status = publish_status(
-                "failed",
-                Some("service_unavailable".to_string()),
-                Some(err.to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-    let cameras = camera_resources_from_hosted(&hosted);
-
-    let accepted = publish_status("accepted", None, None);
-    let _ = publish_gateway_signal_status(
-        &ctx.relay_pool,
-        &ctx.local_relay,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        &accepted,
-    )
-    .await;
-
-    if req.signal_type == "service_projection" {
-        if let Err(err) = grants::resolve_scope_for_request(
-            ctx,
-            &requester_pk,
-            &req.identity_id,
-            &hosted.record.service_pk,
-            &hosted.record.service,
-            &token.capability,
-            &cameras,
-        )
-        .await
-        {
-            let status = publish_status(
-                "rejected",
-                Some("projection_not_granted".to_string()),
-                Some(err.to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-
-        let Some(frame) = req.payload.get("frame").cloned() else {
-            let status = publish_status(
-                "rejected",
-                Some("missing_service_frame".to_string()),
-                Some(
-                    "service projection requests must include a service exchange frame".to_string(),
-                ),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        };
-
-        let url = format!(
-            "{}/service-exchange",
-            hosted.api_base_url.trim().trim_end_matches('/')
-        );
-        let response = ctx
-            .http_client
-            .post(&url)
-            .timeout(Duration::from_secs(45))
-            .json(&json!({
-                "serviceCapability": req.service_capability.clone(),
-                "requestId": req.request_id.clone(),
-                "frame": frame,
-            }))
-            .send()
-            .await;
-        let response = match response {
-            Ok(resp) => resp,
-            Err(err) => {
-                warn!(
-                    request_id = %req.request_id,
-                    signal_type = %req.signal_type,
-                    service = %hosted.record.service,
-                    error = %err,
-                    "gateway service exchange forward failed"
-                );
-                let status = publish_status(
-                    "failed",
-                    Some("service_exchange_failed".to_string()),
-                    Some(err.to_string()),
-                );
-                let _ = publish_gateway_signal_status(
-                    &ctx.relay_pool,
-                    &ctx.local_relay,
-                    &ctx.self_pk,
-                    &ctx.self_sk,
-                    &status,
-                )
-                .await;
-                return;
+async fn gateway_health_projection(ctx: &InboundContext, req: &ServiceProjectionRequest) -> Value {
+    let hosted_services = load_hosted_services_snapshot(&ctx.http_client, &ctx.self_pk).await;
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.gateway.health.v1",
+        json!({
+            "nodePath": "health",
+            "fields": {
+                "status": "online",
+                "zones": ctx.zones.clone(),
+                "hostedServiceCount": hosted_services.len(),
+                "localRelayClients": ctx.local_relay.as_ref().map(|relay| relay.client_count()).unwrap_or(0),
+            },
+            "health": {
+                "status": "online",
             }
-        };
-
-        let response_status = response.status();
-        if !response_status.is_success() {
-            let detail = match response.text().await {
-                Ok(text) if !text.trim().is_empty() => text,
-                _ => format!("status {}", response_status),
-            };
-            warn!(
-                request_id = %req.request_id,
-                signal_type = %req.signal_type,
-                service = %hosted.record.service,
-                status = %response_status,
-                "gateway service exchange rejected request"
-            );
-            let status = publish_status(
-                "failed",
-                Some("service_exchange_rejected".to_string()),
-                Some(detail),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-
-        let body: Value = match response.json().await {
-            Ok(body) => body,
-            Err(err) => {
-                let status = publish_status(
-                    "failed",
-                    Some("invalid_service_exchange_response".to_string()),
-                    Some(err.to_string()),
-                );
-                let _ = publish_gateway_signal_status(
-                    &ctx.relay_pool,
-                    &ctx.local_relay,
-                    &ctx.self_pk,
-                    &ctx.self_sk,
-                    &status,
-                )
-                .await;
-                return;
-            }
-        };
-        let projection = body
-            .get("projection")
-            .cloned()
-            .unwrap_or_else(|| body.clone());
-        let signal = build_gateway_signal_payload(
-            &req,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            "service_projection",
-            json!({ "projection": projection }),
-        );
-        let _ = publish_gateway_signal(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &signal,
-        )
-        .await;
-        let status = publish_status("complete", None, None);
-        let _ = publish_gateway_signal_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    let url = match req.signal_type.as_str() {
-        "offer" => format!("{}/service-access/offer", hosted.api_base_url),
-        "control" => format!("{}/service-access/control", hosted.api_base_url),
-        "admin" => format!("{}/service-access/admin", hosted.api_base_url),
-        "session_close" => format!("{}/service-access/close", hosted.api_base_url),
-        _ => {
-            let status = publish_status(
-                "rejected",
-                Some("unsupported_signal".to_string()),
-                Some("only offer, control, admin, and session_close are supported".to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-
-    let mut active_scope = None;
-    if req.signal_type == "admin" && !token.owner {
-        let status = publish_status(
-            "rejected",
-            Some("admin_requires_owner".to_string()),
-            Some("owner service access is required for camera administration".to_string()),
-        );
-        let _ = publish_gateway_signal_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.signal_type != "session_close" && req.signal_type != "admin" {
-        let scope = match grants::resolve_scope_for_request(
-            ctx,
-            &requester_pk,
-            &req.identity_id,
-            &hosted.record.service_pk,
-            &hosted.record.service,
-            &token.capability,
-            &cameras,
-        )
-        .await
-        {
-            Ok(scope) => scope,
-            Err(err) => {
-                let status = publish_status(
-                    "rejected",
-                    Some("signal_not_granted".to_string()),
-                    Some(err.to_string()),
-                );
-                let _ = publish_gateway_signal_status(
-                    &ctx.relay_pool,
-                    &ctx.local_relay,
-                    &ctx.self_pk,
-                    &ctx.self_sk,
-                    &status,
-                )
-                .await;
-                return;
-            }
-        };
-        active_scope = Some(scope);
-    }
-
-    let mut lease_acquired = false;
-    let request_body = match req.signal_type.as_str() {
-        "offer" => {
-            let scope = active_scope.as_ref().expect("offer scope");
-            let mut forwarded_offer = req.payload.clone();
-            if let Some(map) = forwarded_offer.as_object_mut() {
-                map.insert("sourceIds".to_string(), json!(scope.view_sources.clone()));
-            }
-            let offer_candidates = gateway_offer_candidates(&forwarded_offer);
-            json!({
-                "serviceCapability": req.service_capability.clone(),
-                "offer": forwarded_offer,
-                "candidates": offer_candidates,
-                "iceServers": {
-                    "stun": ctx.stun_servers.clone(),
-                    "turn": ctx.turn_servers.clone(),
-                }
-            })
-        }
-        "control" => {
-            let scope = active_scope.as_ref().expect("control scope");
-            let source_id = req
-                .payload
-                .get("sourceId")
-                .or_else(|| req.payload.get("source_id"))
-                .and_then(|value| value.as_str())
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if source_id.is_empty() {
-                let status = publish_status(
-                    "rejected",
-                    Some("missing_source".to_string()),
-                    Some("control request is missing sourceId".to_string()),
-                );
-                let _ = publish_gateway_signal_status(
-                    &ctx.relay_pool,
-                    &ctx.local_relay,
-                    &ctx.self_pk,
-                    &ctx.self_sk,
-                    &status,
-                )
-                .await;
-                return;
-            }
-            let lease = match grants::acquire_control_lease(
-                ctx,
-                scope,
-                &req.identity_id,
-                &req.device_pk,
-                &hosted.record.service_pk,
-                &source_id,
-            )
-            .await
-            {
-                Ok(lease) => lease,
-                Err(err) => {
-                    let status = publish_status(
-                        "rejected",
-                        Some("control_denied".to_string()),
-                        Some(err.to_string()),
-                    );
-                    let _ = publish_gateway_signal_status(
-                        &ctx.relay_pool,
-                        &ctx.local_relay,
-                        &ctx.self_pk,
-                        &ctx.self_sk,
-                        &status,
-                    )
-                    .await;
-                    return;
-                }
-            };
-            lease_acquired = true;
-            json!({
-                "serviceCapability": req.service_capability.clone(),
-                "payload": req.payload.clone(),
-                "controlLease": lease.lease,
-                "preempted": lease.preempted,
-            })
-        }
-        "admin" => {
-            let action = req
-                .payload
-                .get("action")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default()
-                .trim()
-                .to_string();
-            let payload = req
-                .payload
-                .get("payload")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            json!({
-                "serviceCapability": req.service_capability.clone(),
-                "action": action,
-                "payload": payload,
-            })
-        }
-        _ => json!({
-            "serviceCapability": req.service_capability.clone(),
-            "payload": req.payload.clone(),
         }),
-    };
-
-    let mut invocation_claims = request_body;
-    if let Some(map) = invocation_claims.as_object_mut() {
-        map.insert("requestId".to_string(), json!(req.request_id.clone()));
-        map.insert("signalType".to_string(), json!(req.signal_type.clone()));
-        map.insert("gatewayPk".to_string(), json!(ctx.self_pk.clone()));
-        map.insert("identityId".to_string(), json!(req.identity_id.clone()));
-        map.insert("devicePk".to_string(), json!(req.device_pk.clone()));
-        map.insert(
-            "servicePk".to_string(),
-            json!(hosted.record.service_pk.clone()),
-        );
-        map.insert("service".to_string(), json!(hosted.record.service.clone()));
-    }
-    let issued_at = util::now_unix_seconds() * 1000;
-    let invocation_envelope = match seal_envelope(
-        CAAC_KIND_SERVICE_ACCESS_INVOCATION,
-        &invocation_claims,
-        &ctx.self_sk,
-        std::slice::from_ref(&hosted.record.service_pk),
-        issued_at,
-        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
-    ) {
-        Ok(envelope) => envelope,
-        Err(err) => {
-            warn!(request_id = %req.request_id, error = %err, "failed to seal service invocation");
-            let status = publish_status(
-                "failed",
-                Some("service_invocation_seal_failed".to_string()),
-                Some(err.to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-    let request_body = json!({
-        "serviceRequestEnvelope": invocation_envelope,
-    });
-
-    let request_timeout = match req.signal_type.as_str() {
-        // PTZ control can legitimately take longer now that Reolink control may degrade through
-        // an observed-step fulfillment loop instead of returning after a single blind pulse.
-        "control" => Duration::from_secs(45),
-        "admin" => Duration::from_secs(120),
-        _ => Duration::from_secs(5),
-    };
-    let response = ctx
-        .http_client
-        .post(&url)
-        .timeout(request_timeout)
-        .json(&request_body)
-        .send()
-        .await;
-    let response = match response {
-        Ok(resp) => resp,
-        Err(err) => {
-            warn!(
-                request_id = %req.request_id,
-                signal_type = %req.signal_type,
-                url = %url,
-                error = %err,
-                "gateway signal forward failed"
-            );
-            if lease_acquired {
-                grants::release_control_leases_for_holder(
-                    ctx,
-                    &req.identity_id,
-                    &req.device_pk,
-                    &hosted.record.service_pk,
-                )
-                .await;
-            }
-            let status = publish_status(
-                "failed",
-                Some("service_signal_failed".to_string()),
-                Some(err.to_string()),
-            );
-            let _ = publish_gateway_signal_status(
-                &ctx.relay_pool,
-                &ctx.local_relay,
-                &ctx.self_pk,
-                &ctx.self_sk,
-                &status,
-            )
-            .await;
-            return;
-        }
-    };
-
-    let response_status = response.status();
-    if !response_status.is_success() {
-        if lease_acquired {
-            grants::release_control_leases_for_holder(
-                ctx,
-                &req.identity_id,
-                &req.device_pk,
-                &hosted.record.service_pk,
-            )
-            .await;
-        }
-        let detail = match response.text().await {
-            Ok(text) if !text.trim().is_empty() => text,
-            _ => format!("status {}", response_status),
-        };
-        warn!(
-            request_id = %req.request_id,
-            signal_type = %req.signal_type,
-            url = %url,
-            status = %response_status,
-            detail = %detail,
-            "gateway signal service rejected request"
-        );
-        let status = publish_status(
-            "failed",
-            Some("service_signal_rejected".to_string()),
-            Some(detail),
-        );
-        let _ = publish_gateway_signal_status(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &status,
-        )
-        .await;
-        return;
-    }
-
-    if req.signal_type == "offer" || req.signal_type == "control" || req.signal_type == "admin" {
-        warn!(
-            request_id = %req.request_id,
-            signal_type = %req.signal_type,
-            url = %url,
-            status = %response_status,
-            "gateway signal service accepted request"
-        );
-        let body: Value = match response.json().await {
-            Ok(body) => body,
-            Err(err) => {
-                warn!(
-                    request_id = %req.request_id,
-                    signal_type = %req.signal_type,
-                    url = %url,
-                    error = %err,
-                    "gateway signal response json parse failed"
-                );
-                if lease_acquired {
-                    grants::release_control_leases_for_holder(
-                        ctx,
-                        &req.identity_id,
-                        &req.device_pk,
-                        &hosted.record.service_pk,
-                    )
-                    .await;
-                }
-                let status = publish_status(
-                    "failed",
-                    Some("invalid_service_signal_response".to_string()),
-                    Some(err.to_string()),
-                );
-                let _ = publish_gateway_signal_status(
-                    &ctx.relay_pool,
-                    &ctx.local_relay,
-                    &ctx.self_pk,
-                    &ctx.self_sk,
-                    &status,
-                )
-                .await;
-                return;
-            }
-        };
-        let signal_type = body
-            .get("signalType")
-            .and_then(|v| v.as_str())
-            .unwrap_or(if req.signal_type == "offer" {
-                "answer"
-            } else if req.signal_type == "control" {
-                "control_ack"
-            } else {
-                "admin_result"
-            })
-            .trim()
-            .to_ascii_lowercase();
-        let payload_value = if body.is_object() {
-            body.clone()
-        } else {
-            body.get("payload")
-                .cloned()
-                .or_else(|| body.get("answer").cloned())
-                .unwrap_or_else(|| json!({}))
-        };
-        let signal = build_gateway_signal_payload(
-            &req,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &signal_type,
-            payload_value,
-        );
-        let _ = publish_gateway_signal(
-            &ctx.relay_pool,
-            &ctx.local_relay,
-            &ctx.self_pk,
-            &ctx.self_sk,
-            &signal,
-        )
-        .await;
-    }
-
-    if req.signal_type == "session_close" {
-        grants::release_control_leases_for_holder(
-            ctx,
-            &req.identity_id,
-            &req.device_pk,
-            &hosted.record.service_pk,
-        )
-        .await;
-    }
-
-    let status = publish_status("complete", None, None);
-    let _ = publish_gateway_signal_status(
-        &ctx.relay_pool,
-        &ctx.local_relay,
-        &ctx.self_pk,
-        &ctx.self_sk,
-        &status,
+        json!({
+            "status": "online",
+            "hostedServiceCount": hosted_services.len(),
+        }),
     )
-    .await;
+}
+
+async fn gateway_devices_projection(ctx: &InboundContext, req: &ServiceProjectionRequest) -> Value {
+    let now_ms = util::now_unix_seconds() * 1000;
+    let events = {
+        let guard = ctx.store.lock().await;
+        guard.list_device_events_all()
+    };
+    let devices = events
+        .iter()
+        .filter_map(|event| serde_json::from_str::<Value>(&event.content).ok())
+        .map(|record| {
+            let expires_at = record.get("expiresAt").and_then(Value::as_u64).unwrap_or(0);
+            json!({
+                "devicePk": record.get("devicePk").cloned().unwrap_or_else(|| json!("")),
+                "deviceLabel": record.get("deviceLabel").cloned().unwrap_or_else(|| json!("")),
+                "role": record.get("role").cloned().unwrap_or_else(|| json!("")),
+                "deviceKind": record.get("deviceKind").cloned().unwrap_or_else(|| json!("")),
+                "updatedAt": record.get("updatedAt").cloned().unwrap_or_else(|| json!(0)),
+                "expiresAt": expires_at,
+                "online": expires_at == 0 || expires_at > now_ms,
+            })
+        })
+        .collect::<Vec<_>>();
+    let device_count = devices.len();
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.gateway.devices.v1",
+        json!({
+            "nodePath": "devices",
+            "fields": {
+                "devices": devices,
+            }
+        }),
+        json!({
+            "deviceCount": device_count,
+        }),
+    )
+}
+
+async fn gateway_hosted_services_projection(
+    ctx: &InboundContext,
+    req: &ServiceProjectionRequest,
+) -> Value {
+    let services = load_hosted_services_snapshot(&ctx.http_client, &ctx.self_pk).await;
+    let service_count = services.len();
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.gateway.hostedServices.v1",
+        json!({
+            "nodePath": "hostedServices",
+            "fields": {
+                "services": services,
+            }
+        }),
+        json!({
+            "serviceCount": service_count,
+        }),
+    )
+}
+
+async fn gateway_zones_projection(ctx: &InboundContext, req: &ServiceProjectionRequest) -> Value {
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.gateway.zones.v1",
+        json!({
+            "nodePath": "zones",
+            "fields": {
+                "zones": ctx.zones.clone(),
+            }
+        }),
+        json!({
+            "zoneCount": ctx.zones.len(),
+        }),
+    )
+}
+
+async fn gateway_routing_diagnostics_projection(
+    ctx: &InboundContext,
+    req: &ServiceProjectionRequest,
+) -> Value {
+    let pending_count = ctx.pending.lock().await.len();
+    let peer_count = ctx.peer_set.lock().await.len();
+    gateway_projection_base(
+        ctx,
+        req,
+        "constitute.gateway.routingDiagnostics.v1",
+        json!({
+            "nodePath": "routingDiagnostics",
+            "fields": {
+                "relayConfigured": !ctx.relay_pool.is_empty(),
+                "localRelayClients": ctx.local_relay.as_ref().map(|relay| relay.client_count()).unwrap_or(0),
+                "pendingRequests": pending_count,
+                "udpPeers": peer_count,
+                "zones": ctx.zones.clone(),
+            }
+        }),
+        json!({
+            "relayConfigured": !ctx.relay_pool.is_empty(),
+            "pendingRequests": pending_count,
+            "udpPeers": peer_count,
+        }),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nvr_facts_include_sanitized_live_camera_sources() {
+        let manifest = HostedNvrManifest {
+            service_pk: "nvr-service".to_string(),
+            surface_channel: "nvr.surface".to_string(),
+            camera_devices: vec![json!({
+                "sourceId": "fallback-cam",
+                "name": "Fallback",
+                "rtspUrl": "rtsp://secret"
+            })],
+            ..Default::default()
+        };
+        let health = json!({
+            "status": "ready",
+            "ok": true,
+            "configuredSources": 2,
+            "sources": ["reolink-ec-71-db-32-0a-8f", "xm-192-168-0-201"],
+            "mediaProjection": { "state": "ready", "internalUrl": "http://secret" },
+            "cameraDevices": [
+                {
+                    "sourceId": "reolink-ec-71-db-32-0a-8f",
+                    "name": "Carport",
+                    "vendor": "reolink",
+                    "model": "E1 Outdoor SE",
+                    "enabled": true,
+                    "rtspConfigured": true,
+                    "rtspUrl": "rtsp://operator:secret@camera",
+                    "ptzCapable": true
+                },
+                {
+                    "sourceId": "xm-192-168-0-201",
+                    "name": "Front Door",
+                    "model": "40E",
+                    "enabled": true,
+                    "ptzCapable": false
+                }
+            ]
+        });
+
+        let facts = nvr_manifest_facts(&manifest, 2, Some(&health));
+
+        assert_eq!(facts["configuredSources"], 2);
+        assert_eq!(facts["sources"][0], "reolink-ec-71-db-32-0a-8f");
+        assert_eq!(facts["cameraDevices"][0]["name"], "Carport");
+        assert_eq!(facts["cameraDevices"][0]["ptzCapable"], true);
+        assert_eq!(facts["health"]["sources"][1], "xm-192-168-0-201");
+        assert_eq!(facts["mediaProjection"]["state"], "ready");
+        let rendered = facts.to_string();
+        assert!(!rendered.contains("rtsp://"));
+        assert!(!rendered.contains("secret"));
+        assert!(!rendered.contains("internalUrl"));
+    }
 }

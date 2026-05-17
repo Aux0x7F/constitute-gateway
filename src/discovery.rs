@@ -109,6 +109,8 @@ pub struct SwarmDeviceRecord {
     #[serde(default)]
     pub relays: Vec<String>,
     #[serde(default)]
+    pub swarm_edge_endpoint: String,
+    #[serde(default)]
     pub host_platform: String,
     #[serde(default = "default_service_version")]
     pub service_version: String,
@@ -132,6 +134,7 @@ impl SwarmDeviceRecord {
         device_label: &str,
         role: &str,
         relays: Vec<String>,
+        swarm_edge_endpoint: &str,
         host_platform: &str,
         release_channel: &str,
         release_track: &str,
@@ -149,6 +152,7 @@ impl SwarmDeviceRecord {
             service: String::new(),
             host_gateway_pk: String::new(),
             relays,
+            swarm_edge_endpoint: swarm_edge_endpoint.trim().to_string(),
             host_platform: host_platform.to_string(),
             service_version: service_version(),
             release_channel: release_channel.to_string(),
@@ -175,6 +179,7 @@ impl SwarmDeviceRecord {
             "service": self.service,
             "hostGatewayPk": self.host_gateway_pk,
             "relays": self.relays,
+            "swarmEdgeEndpoint": self.swarm_edge_endpoint,
             "hostPlatform": self.host_platform,
             "serviceVersion": self.service_version,
             "releaseChannel": self.release_channel,
@@ -312,6 +317,7 @@ impl DiscoveryClient {
         record.updated_at = now;
         record.expires_at = now + RECORD_TTL_MS;
         record.hosted_services = self.hosted_services_rx.borrow().clone();
+        append_gateway_service_surface(&mut record);
         let tags = vec![
             vec!["t".to_string(), DEFAULT_RECORD_TAG.to_string()],
             vec!["type".to_string(), "device".to_string()],
@@ -364,6 +370,44 @@ impl DiscoveryClient {
     }
 }
 
+pub fn append_gateway_service_surface(record: &mut SwarmDeviceRecord) {
+    let gateway_service = gateway_service_surface_record(record);
+    let gateway_service_pk = gateway_service.service_pk.trim();
+    record.hosted_services.retain(|service| {
+        service.service_pk.trim() != gateway_service_pk || service.service.trim() != "gateway"
+    });
+    record.hosted_services.push(gateway_service);
+}
+
+fn gateway_service_surface_record(record: &SwarmDeviceRecord) -> HostedServiceRecord {
+    HostedServiceRecord {
+        device_pk: record.device_pk.clone(),
+        service_pk: record.device_pk.clone(),
+        device_label: if record.device_label.trim().is_empty() {
+            "Gateway".to_string()
+        } else {
+            record.device_label.clone()
+        },
+        device_kind: "service".to_string(),
+        service: "gateway".to_string(),
+        host_gateway_pk: record.device_pk.clone(),
+        service_version: record.service_version.clone(),
+        updated_at: record.updated_at,
+        freshness_ms: 0,
+        status: "online".to_string(),
+        camera_count: 0,
+        facts: json!({
+            "surfaceChannel": "gateway.surface",
+            "aliases": ["Gateway", record.device_label],
+            "summary": "Gateway routing, hosted-service, zone, and device observation.",
+            "health": { "status": "online" },
+            "locationId": record.device_label,
+            "hostGatewayLabel": record.device_label,
+            "nodes": ["health", "devices", "hostedServices", "zones", "routingDiagnostics"],
+        }),
+    }
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -413,6 +457,7 @@ mod tests {
             "DevGateway",
             "gateway",
             vec!["ws://gateway.example:7447".to_string()],
+            "ws://gateway.example:7448",
             "linux",
             "release",
             "latest",
@@ -434,11 +479,17 @@ mod tests {
                 "configuredSources": 1,
             }),
         });
+        record
+            .hosted_services
+            .push(super::gateway_service_surface_record(&record));
 
         let json = record.to_json();
         assert!(json.contains("\"deviceKind\":\"service\""));
         assert!(json.contains("\"relays\":[\"ws://gateway.example:7447\"]"));
+        assert!(json.contains("\"swarmEdgeEndpoint\":\"ws://gateway.example:7448\""));
         assert!(json.contains("\"hostedServices\":["));
         assert!(json.contains("\"service\":\"nvr\""));
+        assert!(json.contains("\"service\":\"gateway\""));
+        assert!(json.contains("\"surfaceChannel\":\"gateway.surface\""));
     }
 }
