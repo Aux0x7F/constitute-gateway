@@ -1212,7 +1212,10 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
         .expect("delivery text");
     let service_value: serde_json::Value = serde_json::from_str(&service_delivery).unwrap();
     assert_eq!(service_value["type"], "swarm.frame");
-    assert_eq!(service_value["frame"]["capability"], CAPABILITY_STREAM_SESSION_OFFER);
+    assert_eq!(
+        service_value["frame"]["capability"],
+        CAPABILITY_STREAM_SESSION_OFFER
+    );
 
     let member_write = browser_rx
         .next()

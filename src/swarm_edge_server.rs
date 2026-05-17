@@ -578,7 +578,13 @@ mod tests {
             }
         });
 
-        assert!(!edge_frame_correlates_to(&unrelated.to_string(), "offer-frame"));
-        assert!(edge_frame_correlates_to(&admission.to_string(), "offer-frame"));
+        assert!(!edge_frame_correlates_to(
+            &unrelated.to_string(),
+            "offer-frame"
+        ));
+        assert!(edge_frame_correlates_to(
+            &admission.to_string(),
+            "offer-frame"
+        ));
     }
 }
