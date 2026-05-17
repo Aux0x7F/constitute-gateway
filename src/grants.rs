@@ -1,7 +1,8 @@
 use super::*;
 
+// Grant relay publication remains a bootstrap/fallback compatibility path.
+// Normal service/runtime coordination converges through swarm edge frames.
 const GRANTS_FILE_NAME: &str = "managed-grants.json";
-const CONTROL_LEASE_TTL_MS: u64 = 8_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -144,12 +145,6 @@ struct GatewayGrantStatusPayload {
     ts: u64,
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub(super) struct ControlLeaseDecision {
-    pub lease: ControlLease,
-    pub preempted: bool,
-}
-
 #[derive(Debug, Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 struct SharedResourceProjection {
@@ -213,10 +208,6 @@ fn dedup_source_ids(values: impl IntoIterator<Item = String>) -> Vec<String> {
 
 fn active_grant(grant: &GatewayGrantRecord) -> bool {
     grant.revoked_at == 0
-}
-
-fn lease_key(service_pk: &str, source_id: &str) -> String {
-    format!("{}:{}", service_pk.trim(), source_id.trim())
 }
 
 fn cleanup_control_leases(state: &mut GrantState) {
@@ -425,95 +416,6 @@ pub(super) async fn scope_for_identity(
         cameras,
         grant_ids,
     })
-}
-
-pub(super) async fn resolve_scope_for_request(
-    ctx: &InboundContext,
-    requester_pk: &str,
-    identity_id: &str,
-    service_pk: &str,
-    service: &str,
-    capability: &str,
-    cameras: &[CameraResource],
-) -> Result<GrantScope> {
-    if !matches!(
-        (service.trim(), capability.trim()),
-        ("nvr", "nvr.view")
-            | ("nvr", "nvr.manage")
-            | ("nvr", "gateway.service_access")
-            | ("logging", "logging.view")
-    ) {
-        return Err(anyhow!("unsupported capability"));
-    }
-    if !requester_matches_identity(ctx, requester_pk, identity_id).await {
-        return Err(anyhow!("requester is not authorized for this identity"));
-    }
-    scope_for_identity(ctx, identity_id, service_pk, service, cameras).await
-}
-
-pub(super) async fn acquire_control_lease(
-    ctx: &InboundContext,
-    scope: &GrantScope,
-    identity_id: &str,
-    device_pk: &str,
-    service_pk: &str,
-    source_id: &str,
-) -> Result<ControlLeaseDecision> {
-    let source = source_id.trim();
-    if source.is_empty() {
-        return Err(anyhow!("missing sourceId"));
-    }
-    if !scope.control_sources.iter().any(|entry| entry == source) {
-        return Err(anyhow!("control is not granted for this camera"));
-    }
-
-    let now_ms = util::now_unix_seconds() * 1000;
-    let expires_at = now_ms + CONTROL_LEASE_TTL_MS;
-    let key = lease_key(service_pk, source);
-    let mut grant_state = ctx.grant_state.lock().await;
-    cleanup_control_leases(&mut grant_state);
-    let mut preempted = false;
-
-    if let Some(existing) = grant_state.control_leases.get(&key) {
-        let same_holder = existing.holder_identity_id.trim() == identity_id.trim()
-            && existing.holder_device_pk.trim() == device_pk.trim();
-        if !same_holder {
-            if scope.owner {
-                preempted = true;
-            } else if existing.owner {
-                return Err(anyhow!("owner is currently controlling this camera"));
-            } else {
-                return Err(anyhow!("camera control is already held by another session"));
-            }
-        }
-    }
-
-    let lease = ControlLease {
-        service_pk: service_pk.trim().to_string(),
-        source_id: source.to_string(),
-        holder_identity_id: identity_id.trim().to_string(),
-        holder_device_pk: device_pk.trim().to_string(),
-        owner: scope.owner,
-        acquired_at: now_ms,
-        expires_at,
-    };
-    grant_state.control_leases.insert(key, lease.clone());
-    Ok(ControlLeaseDecision { lease, preempted })
-}
-
-pub(super) async fn release_control_leases_for_holder(
-    ctx: &InboundContext,
-    identity_id: &str,
-    device_pk: &str,
-    service_pk: &str,
-) {
-    let mut grant_state = ctx.grant_state.lock().await;
-    cleanup_control_leases(&mut grant_state);
-    grant_state.control_leases.retain(|_, lease| {
-        !(lease.service_pk.trim() == service_pk.trim()
-            && lease.holder_identity_id.trim() == identity_id.trim()
-            && lease.holder_device_pk.trim() == device_pk.trim())
-    });
 }
 
 fn grant_view(grant: &GatewayGrantRecord) -> Value {

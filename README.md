@@ -1,69 +1,13 @@
-# Constitute Gateway
+# constitute-gateway
 
-Native gateway service for Constitution browser surfaces. This repository provides the native dependency layer that `constitute-account`, `constitute-gateway-ui`, `constitute-nvr-ui`, and native workloads use for discovery bootstrap, relay bridging, and swarm-facing transport primitives.
+`constitute-gateway` is the native swarm edge for a Constitution deployment.
 
-## Scope
-- Nostr-based discovery bootstrap and zone presence publication
-- Gateway local relay surface for web clients
-- Zone-scoped UDP/QUIC mesh transport and DHT-style request/response primitives
-- Hosted service inventory, service access, and producer-owned logging surface
-- Windows and Linux service install/update paths
+It handles discovery/bootstrap, gateway presence, hosted-service inventory,
+browser/service/CLI edge sessions, service admission, swarm-frame routing, and
+release packaging for the gateway runtime. Nostr remains a bootstrap/fallback
+carrier; normal service traffic routes as `SwarmFrame` records through the
+swarm edge hub.
 
-Out of scope:
-- OS install media/image generation
-- Web UI and UX
-- Service-specific application logic (for example NVR ingest/retention)
-
-## Status
-Implemented:
-- Discovery and zone presence contracts
-- Gateway record query and DHT put/get bridge
-- UDP forwarding fanout and hop bounds
-- Optional QUIC datagram transport path with local integration tests
-- Release install/update scripts for Windows and Linux services
-- CAAC service access and hosted-service inventory for NVR, storage, and logging capability services
-
-In progress:
-- Transport hardening and operational tuning for difficult NAT topologies
-- Web parity for full convergence on identity/device resolution behavior
-
-## Installation
-Web workflow:
-- Open `constitute-gateway-ui`
-- Use the gateway management surface to open install/update flows
-- Run the generated operator command
-- After pairing, use gateway zone-sync controls in `constitute-gateway-ui` to sync identity zones and optional gateway-extra zones
-
-CLI and source-build workflow:
-- See [`docs/OPERATOR.md`](docs/OPERATOR.md)
-
-Runtime operations:
-- See [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-
-## Operator Artifacts
-Release assets include:
-- `constitute-operator-windows.zip`
-- `constitute-operator-linux-amd64.tar.gz`
-
-Operator scope is service install/update only (no media/image build path).
-
-## Documentation
-- Operator install/update and CLI reference: [`docs/OPERATOR.md`](docs/OPERATOR.md)
-- Runtime operations and hardening: [`docs/OPERATIONS.md`](docs/OPERATIONS.md)
-- Development workflow: [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md)
-- Protocol contracts: [`docs/PROTOCOL.md`](docs/PROTOCOL.md)
-- Project roadmap brief: [`docs/ROADMAP.md`](docs/ROADMAP.md)
-- Architecture and detailed roadmap: [`ARCHITECTURE.md`](ARCHITECTURE.md)
-
-## Runner Entrypoints
-- Linux: `./scripts/run.sh`
-- Windows: `powershell -ExecutionPolicy Bypass -File .\scripts\run.ps1`
-
-## Security Posture
-- Discovery transport is treated as observable metadata.
-- Identity and application confidentiality belongs to higher crypto layers.
-- Operators should apply VPN/tunnel controls based on risk profile.
-- Release updates are consumed from tagged GitHub Releases by default.
-
-## Contributing
-Contribution standards and commit conventions are documented in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+Gateway owns edge admission, route observations, and attached-session directory
+truth. It routes and attests generic frames without owning NVR media semantics,
+Logging query semantics, Storage object semantics, or identity authority.

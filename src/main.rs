@@ -7,6 +7,8 @@ mod managed;
 mod nostr;
 mod platform;
 mod relay;
+mod swarm_edge;
+mod swarm_edge_server;
 mod swarm_store;
 mod transport;
 mod util;
@@ -14,12 +16,6 @@ mod util;
 use crate::swarm_store::{RecordType, SwarmStoreMap};
 use anyhow::{anyhow, Context, Result};
 use clap::{ArgAction, Parser};
-use constitute_protocol::{
-    seal_envelope, CaacEnvelope, ReplayCache, CAAC_KIND_SERVICE_ACCESS_SIGNAL,
-    CAAC_KIND_SERVICE_ACCESS_STATUS, DEFAULT_REQUEST_TTL_SECONDS,
-    EVENT_GATEWAY_SERVICE_ACCESS_STATUS, EVENT_GATEWAY_SERVICE_SIGNAL,
-    EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST, EVENT_GATEWAY_SERVICE_SIGNAL_STATUS,
-};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
 use reqwest::Client as HttpClient;
@@ -125,6 +121,10 @@ struct Config {
     turn_servers: Vec<String>,
     #[serde(default = "default_relay_bind")]
     relay_bind: String,
+    #[serde(default = "default_swarm_edge_bind")]
+    swarm_edge_bind: String,
+    #[serde(rename = "swarmEdgeEndpoint", alias = "swarm_edge_endpoint", default)]
+    swarm_edge_endpoint: String,
     #[serde(default)]
     relay_bind_tls: String,
     #[serde(default)]
@@ -224,8 +224,8 @@ struct GatewayServiceInstallRequest {
     authorized_device_pks: Vec<String>,
     #[serde(rename = "swarmPeers", default)]
     swarm_peers: Vec<String>,
-    #[serde(rename = "publicWsUrl", default)]
-    public_ws_url: String,
+    #[serde(rename = "swarmEdgeEndpoint", default)]
+    swarm_edge_endpoint: String,
     #[serde(rename = "allowUnsignedDebugHello", default)]
     allow_unsigned_debug_hello: Option<bool>,
     #[serde(rename = "reolinkAutoprovision", default)]
@@ -314,93 +314,6 @@ struct GatewayZoneSyncStatusPayload {
     reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     detail: Option<String>,
-    ts: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GatewayServiceAccessRequest {
-    #[serde(rename = "requestId", default)]
-    request_id: String,
-    #[serde(rename = "toDevicePk", default)]
-    to_device_pk: String,
-    #[serde(rename = "identityId", default)]
-    identity_id: String,
-    #[serde(rename = "devicePk", default)]
-    device_pk: String,
-    #[serde(rename = "servicePk", default)]
-    service_pk: String,
-    #[serde(default)]
-    service: String,
-    #[serde(default)]
-    capability: String,
-    #[serde(rename = "accessNonce", default)]
-    access_nonce: String,
-    #[serde(default)]
-    zone: String,
-    #[serde(rename = "appRepo", default)]
-    app_repo: String,
-    #[serde(default)]
-    display: Value,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct GatewayServiceAccessStatusPayload {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(rename = "toDevicePk")]
-    to_device_pk: String,
-    #[serde(rename = "gatewayPk")]
-    gateway_pk: String,
-    #[serde(rename = "statusEnvelope")]
-    status_envelope: CaacEnvelope,
-    ts: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct GatewaySignalRequest {
-    #[serde(rename = "requestId", default)]
-    request_id: String,
-    #[serde(rename = "toDevicePk", default)]
-    to_device_pk: String,
-    #[serde(rename = "identityId", default)]
-    identity_id: String,
-    #[serde(rename = "devicePk", default)]
-    device_pk: String,
-    #[serde(rename = "servicePk", default)]
-    service_pk: String,
-    #[serde(default)]
-    service: String,
-    #[serde(rename = "signalType", default)]
-    signal_type: String,
-    #[serde(default)]
-    payload: Value,
-    #[serde(rename = "serviceCapability", default)]
-    service_capability: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct GatewaySignalStatusPayload {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(rename = "toDevicePk")]
-    to_device_pk: String,
-    #[serde(rename = "gatewayPk")]
-    gateway_pk: String,
-    #[serde(rename = "statusEnvelope")]
-    status_envelope: CaacEnvelope,
-    ts: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct GatewaySignalPayload {
-    #[serde(rename = "type")]
-    kind: String,
-    #[serde(rename = "toDevicePk")]
-    to_device_pk: String,
-    #[serde(rename = "gatewayPk")]
-    gateway_pk: String,
-    #[serde(rename = "signalEnvelope")]
-    signal_envelope: CaacEnvelope,
     ts: u64,
 }
 
@@ -554,6 +467,14 @@ fn default_stun_interval_secs() -> u64 {
 
 fn default_relay_bind() -> String {
     "0.0.0.0:7447".to_string()
+}
+
+fn default_swarm_edge_bind() -> String {
+    "0.0.0.0:7448".to_string()
+}
+
+fn advertised_swarm_edge_endpoint(cfg: &Config) -> String {
+    cfg.swarm_edge_endpoint.trim().to_string()
 }
 
 fn default_relay_rebroadcast() -> bool {
@@ -794,12 +715,14 @@ async fn main() -> Result<()> {
     let device_pk = cfg.nostr_pubkey.clone();
     let identity_id = cfg.identity_id.clone();
     let device_label = cfg.device_label.clone();
+    let swarm_edge_endpoint = advertised_swarm_edge_endpoint(&cfg);
     let device_record = discovery::SwarmDeviceRecord::new(
         &device_pk,
         &identity_id,
         &device_label,
         &node_role,
         advertise_relays.clone(),
+        &swarm_edge_endpoint,
         platform::runtime_platform(),
         cfg.release_channel.trim(),
         cfg.release_track.trim(),
@@ -887,6 +810,20 @@ async fn main() -> Result<()> {
         Err(err) => {
             warn!(error = %err, "local relay failed to start");
             None
+        }
+    };
+
+    let _swarm_edge = if cfg.swarm_edge_bind.trim().is_empty() {
+        warn!("swarm_edge_bind empty; live swarm edge socket disabled");
+        None
+    } else {
+        match swarm_edge_server::start(cfg.swarm_edge_bind.clone(), cfg.nostr_pubkey.clone()).await
+        {
+            Ok(handle) => Some(handle),
+            Err(err) => {
+                warn!(error = %err, bind = %cfg.swarm_edge_bind, "swarm edge failed to start");
+                None
+            }
         }
     };
 
@@ -1100,7 +1037,6 @@ async fn main() -> Result<()> {
         seen: seen_cache.clone(),
         seen_ttl: validation.replay_window,
         seen_max: 4096,
-        caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
         remote_service_install_enabled: cfg.remote_service_install_enabled,
         remote_service_install_timeout_secs: cfg.remote_service_install_timeout_secs.max(60),
         http_client: http_client.clone(),
@@ -1492,7 +1428,7 @@ fn normalize_gateway_service_install_request(req: &mut GatewayServiceInstallRequ
     req.pair_identity = trim_nonempty(&req.pair_identity);
     req.pair_code = trim_nonempty(&req.pair_code);
     req.pair_code_hash = trim_nonempty(&req.pair_code_hash);
-    req.public_ws_url = trim_nonempty(&req.public_ws_url);
+    req.swarm_edge_endpoint = trim_nonempty(&req.swarm_edge_endpoint);
     req.reolink_username = trim_nonempty(&req.reolink_username);
     req.reolink_password = trim_nonempty(&req.reolink_password);
     req.reolink_desired_password = trim_nonempty(&req.reolink_desired_password);
@@ -1584,15 +1520,15 @@ fn execute_nvr_install_request(
         req.pair_code_hash.clone(),
     ];
 
-    if req.allow_unsigned_debug_hello.unwrap_or(true) {
+    if req.allow_unsigned_debug_hello.unwrap_or(false) {
         args.push("--allow-unsigned-debug-hello".to_string());
     } else {
         args.push("--require-signed-hello".to_string());
     }
 
-    if !req.public_ws_url.is_empty() {
-        args.push("--public-ws-url".to_string());
-        args.push(req.public_ws_url.clone());
+    if !req.swarm_edge_endpoint.is_empty() {
+        args.push("--swarm-edge-endpoint".to_string());
+        args.push(req.swarm_edge_endpoint.clone());
     }
 
     for peer in &req.swarm_peers {
@@ -2118,157 +2054,6 @@ fn build_gateway_zone_sync_status_payload(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_gateway_service_access_status_payload(
-    req: &GatewayServiceAccessRequest,
-    gateway_pk: &str,
-    gateway_sk: &str,
-    status: &str,
-    service_capability: Option<String>,
-    expires_at: Option<u64>,
-    display: Option<Value>,
-    reason: Option<String>,
-    detail: Option<String>,
-) -> Result<GatewayServiceAccessStatusPayload> {
-    let issued_at = util::now_unix_seconds() * 1000;
-    let status_expires_at = issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000);
-    let claims = json!({
-        "requestId": req.request_id,
-        "status": status,
-        "gatewayPk": gateway_pk,
-        "identityId": req.identity_id,
-        "devicePk": req.device_pk,
-        "servicePk": req.service_pk,
-        "service": req.service,
-        "capability": req.capability,
-        "serviceCapability": service_capability,
-        "expiresAt": expires_at,
-        "display": display,
-        "reason": reason,
-        "detail": detail,
-        "issuedAt": issued_at,
-        "ts": issued_at,
-    });
-    let status_envelope = seal_envelope(
-        CAAC_KIND_SERVICE_ACCESS_STATUS,
-        &claims,
-        gateway_sk,
-        &[req.device_pk.clone()],
-        issued_at,
-        status_expires_at,
-    )?;
-    Ok(GatewayServiceAccessStatusPayload {
-        kind: EVENT_GATEWAY_SERVICE_ACCESS_STATUS.to_string(),
-        to_device_pk: req.device_pk.clone(),
-        gateway_pk: gateway_pk.to_string(),
-        status_envelope,
-        ts: issued_at,
-    })
-}
-
-fn build_gateway_signal_status_payload(
-    req: &GatewaySignalRequest,
-    gateway_pk: &str,
-    gateway_sk: &str,
-    status: &str,
-    reason: Option<String>,
-    detail: Option<String>,
-) -> GatewaySignalStatusPayload {
-    let issued_at = util::now_unix_seconds() * 1000;
-    let status_envelope = seal_envelope(
-        CAAC_KIND_SERVICE_ACCESS_STATUS,
-        &json!({
-            "requestId": req.request_id,
-            "status": status,
-            "gatewayPk": gateway_pk,
-            "identityId": req.identity_id,
-            "devicePk": req.device_pk,
-            "servicePk": req.service_pk,
-            "service": req.service,
-            "signalType": req.signal_type,
-            "reason": reason,
-            "detail": detail,
-            "issuedAt": issued_at,
-            "ts": issued_at,
-        }),
-        gateway_sk,
-        &[req.device_pk.clone()],
-        issued_at,
-        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
-    )
-    .expect("seal service signal status");
-    GatewaySignalStatusPayload {
-        kind: EVENT_GATEWAY_SERVICE_SIGNAL_STATUS.to_string(),
-        to_device_pk: req.device_pk.clone(),
-        gateway_pk: gateway_pk.to_string(),
-        status_envelope,
-        ts: issued_at,
-    }
-}
-
-fn build_gateway_signal_payload(
-    req: &GatewaySignalRequest,
-    gateway_pk: &str,
-    gateway_sk: &str,
-    signal_type: &str,
-    payload: Value,
-) -> GatewaySignalPayload {
-    let issued_at = util::now_unix_seconds() * 1000;
-    let signal_envelope = seal_envelope(
-        CAAC_KIND_SERVICE_ACCESS_SIGNAL,
-        &json!({
-            "requestId": req.request_id,
-            "gatewayPk": gateway_pk,
-            "identityId": req.identity_id,
-            "devicePk": req.device_pk,
-            "servicePk": req.service_pk,
-            "service": req.service,
-            "signalType": signal_type,
-            "payload": payload,
-            "issuedAt": issued_at,
-            "ts": issued_at,
-        }),
-        gateway_sk,
-        &[req.device_pk.clone()],
-        issued_at,
-        issued_at + (DEFAULT_REQUEST_TTL_SECONDS * 1000),
-    )
-    .expect("seal service signal payload");
-    GatewaySignalPayload {
-        kind: EVENT_GATEWAY_SERVICE_SIGNAL.to_string(),
-        to_device_pk: req.device_pk.clone(),
-        gateway_pk: gateway_pk.to_string(),
-        signal_envelope,
-        ts: issued_at,
-    }
-}
-
-fn service_sources_from_health(health: &Value) -> Vec<String> {
-    health
-        .get("sources")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|entry| entry.as_str().map(|v| v.trim().to_string()))
-                .filter(|entry| !entry.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn service_sources_from_config(cameras: &[Value]) -> Vec<String> {
-    cameras
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .get("source_id")
-                .and_then(|v| v.as_str())
-                .or_else(|| entry.get("sourceId").and_then(|v| v.as_str()))
-                .map(|v| v.trim().to_string())
-        })
-        .filter(|entry| !entry.is_empty())
-        .collect()
-}
-
 fn build_device_record_event(
     pubkey: &str,
     sk_hex: &str,
@@ -2308,6 +2093,7 @@ async fn publish_current_device_record(
     record.updated_at = now_ms;
     record.expires_at = now_ms + (24 * 60 * 60 * 1000);
     record.hosted_services = hosted_services.to_vec();
+    discovery::append_gateway_service_surface(&mut record);
     let Ok(record_ev) = build_device_record_event(pubkey, sk_hex, &record) else {
         return;
     };
@@ -2495,13 +2281,8 @@ fn is_mesh_passthrough_kind(kind: &str) -> bool {
             | "gateway_service_install_status"
             | "gateway_zone_sync_request"
             | "gateway_zone_sync_status"
-            | "gateway_service_access_request"
-            | "gateway_service_access_status"
             | "gateway_grant_request"
             | "gateway_grant_status"
-            | EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST
-            | EVENT_GATEWAY_SERVICE_SIGNAL_STATUS
-            | EVENT_GATEWAY_SERVICE_SIGNAL
     )
 }
 
@@ -2605,7 +2386,6 @@ struct InboundContext {
     seen: Arc<Mutex<SeenCache>>,
     seen_ttl: Duration,
     seen_max: usize,
-    caac_replay: Arc<Mutex<ReplayCache>>,
     remote_service_install_enabled: bool,
     remote_service_install_timeout_secs: u64,
     http_client: HttpClient,
@@ -3028,18 +2808,8 @@ async fn process_inbound_event(
             return;
         }
 
-        if kind == "gateway_service_access_request" {
-            managed::handle_gateway_service_access_request(&ctx, &nostr_ev, &payload).await;
-            return;
-        }
-
         if kind == "gateway_grant_request" {
             grants::handle_gateway_grant_request(&ctx, &nostr_ev, &payload).await;
-            return;
-        }
-
-        if kind == EVENT_GATEWAY_SERVICE_SIGNAL_REQUEST {
-            managed::handle_gateway_signal_request(&ctx, &nostr_ev, &payload).await;
             return;
         }
 
@@ -3883,26 +3653,6 @@ mod tests {
         assert_eq!(fallback, vec!["zone-a".to_string()]);
     }
 
-    #[test]
-    fn gateway_offer_candidates_reads_nested_browser_offer_candidates() {
-        let payload = json!({
-            "description": {
-                "type": "offer",
-                "sdp": "v=0\r\n",
-            },
-            "candidates": [
-                {
-                    "candidate": "candidate:1 1 udp 2122260223 10.0.229.73 54547 typ host",
-                    "sdpMid": "0",
-                    "sdpMLineIndex": 0,
-                }
-            ],
-        });
-
-        let candidates = managed::gateway_offer_candidates(&payload);
-        assert_eq!(candidates.as_array().map(|items| items.len()), Some(1));
-    }
-
     #[tokio::test]
     async fn web_bridge_swarm_record_request() {
         let (pk, sk) = nostr::generate_keypair();
@@ -4005,7 +3755,6 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
-            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
@@ -4195,7 +3944,6 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
-            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
@@ -4341,7 +4089,6 @@ mod tests {
             seen: Arc::new(Mutex::new(SeenCache::new())),
             seen_ttl: Duration::from_secs(600),
             seen_max: 1024,
-            caac_replay: Arc::new(Mutex::new(ReplayCache::default())),
             gateway_identity_id: "id-test".to_string(),
             pair_identity_label: String::new(),
             pair_code_hash: String::new(),
