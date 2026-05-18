@@ -750,6 +750,7 @@ fn storage_capabilities(manifest: &HostedStorageManifest) -> Value {
             "encrypted_index_shards",
             "key_grants",
             "pin_leases",
+            "surface.app.distribution.pin",
             "prune",
             "local_search",
             "watch"
@@ -2121,5 +2122,16 @@ mod tests {
         assert!(!rendered.contains("rtsp://"));
         assert!(!rendered.contains("secret"));
         assert!(!rendered.contains("internalUrl"));
+    }
+
+    #[test]
+    fn default_storage_capabilities_advertise_app_distribution_pinning() {
+        let manifest = HostedStorageManifest::default();
+        let capabilities = storage_capabilities(&manifest);
+        assert!(capabilities
+            .as_array()
+            .expect("capability array")
+            .iter()
+            .any(|value| value.as_str() == Some("surface.app.distribution.pin")));
     }
 }
