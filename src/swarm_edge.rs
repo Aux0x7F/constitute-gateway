@@ -573,6 +573,8 @@ pub struct ProjectionBridge {
     pub channel_id: Option<String>,
     pub projection_ref: Option<String>,
     pub delta: bool,
+    pub materialization_budget_ref: Option<String>,
+    pub consumer_floor_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -604,6 +606,14 @@ pub fn bridge_service_frame(frame: &SwarmFrame) -> Option<ServiceBridgeRecord> {
                 channel_id: frame.channel_id.clone(),
                 projection_ref: frame.record_ref.as_ref().map(|record| record.id.clone()),
                 delta: matches!(frame.kind, SwarmFrameKind::ProjectionDelta),
+                materialization_budget_ref: frame
+                    .channel_id
+                    .as_ref()
+                    .map(|channel| format!("materialization:gateway:{channel}:bridge")),
+                consumer_floor_ref: frame
+                    .channel_id
+                    .as_ref()
+                    .map(|channel| format!("consumer-floor:gateway:{channel}:service-bridge")),
             }))
         }
         SwarmFrameKind::StoragePinIntent | SwarmFrameKind::StoragePinAttestation => {
