@@ -168,7 +168,7 @@ fn harness() -> (SwarmEdgeCore, String) {
         SwarmRouteMember {
             member_ref: WRONG_CHANNEL_PK.to_string(),
             zone_id: "zone-a".to_string(),
-            channel_ids: vec!["logging.events".to_string()],
+            channel_ids: vec![constitute_protocol::PROJECTION_CHANNEL_LOGGING_EVENTS.to_string()],
             audience_refs: vec![SERVICE_REF.to_string()],
             capabilities: vec![CAPABILITY_SERVICE_INTENT_INVOKE.to_string()],
             interested: true,
@@ -179,7 +179,7 @@ fn harness() -> (SwarmEdgeCore, String) {
             zone_id: "zone-a".to_string(),
             channel_ids: vec!["nvr.control".to_string()],
             audience_refs: vec![SERVICE_REF.to_string()],
-            capabilities: vec!["projection.observe".to_string()],
+            capabilities: vec![constitute_protocol::CAPABILITY_PROJECTION_OBSERVE.to_string()],
             interested: true,
             replicator: false,
         },
@@ -313,7 +313,7 @@ fn planner_returns_only_authorized_members_and_respects_hop_budget() {
             .record_ref
             .as_ref()
             .map(|record| record.kind.as_str()),
-        Some("route.observation")
+        Some(constitute_protocol::RECORD_ROUTE_OBSERVATION)
     );
 
     let mut exhausted_frame = valid_frame("frame-plan-ttl", "nonce-plan-ttl");
@@ -449,7 +449,7 @@ fn service_projection_and_storage_frames_emit_adapter_bridge_records() {
     let mut projection = valid_frame("projection", "nonce-projection");
     projection.kind = SwarmFrameKind::ProjectionDelta;
     projection.record_ref = Some(SwarmRecordRef {
-        kind: "projection.delta".to_string(),
+        kind: constitute_protocol::RECORD_PROJECTION_DELTA.to_string(),
         id: "nvr.status".to_string(),
         revision: Some(7),
     });
@@ -466,7 +466,7 @@ fn service_projection_and_storage_frames_emit_adapter_bridge_records() {
     let mut storage = valid_frame("pin", "nonce-pin");
     storage.kind = SwarmFrameKind::StoragePinIntent;
     storage.record_ref = Some(SwarmRecordRef {
-        kind: "storage.pin.intent".to_string(),
+        kind: constitute_protocol::RECORD_STORAGE_PIN_INTENT.to_string(),
         id: "pin-1".to_string(),
         revision: None,
     });
@@ -757,13 +757,14 @@ fn service_edge_member_routes_by_typed_service_pk_for_namespaced_member_ref() {
         CAPABILITY_SWARM_EDGE_ATTACH.to_string(),
         CAPABILITY_SERVICE_INTENT_INVOKE.to_string(),
     ];
-    service_hello.channel_refs = vec!["logging.events".to_string()];
+    service_hello.channel_refs =
+        vec![constitute_protocol::PROJECTION_CHANNEL_LOGGING_EVENTS.to_string()];
     match hub.attach_member(SwarmEdgeMemberKind::Service, service_hello, NOW) {
         SwarmEdgeAttachResult::Accepted(_) => {}
         SwarmEdgeAttachResult::Rejected(reject) => panic!("service attach rejected: {reject:?}"),
     };
     let mut frame = valid_frame("namespaced-service-pk", "namespaced-service-pk-nonce");
-    frame.channel_id = Some("logging.events".to_string());
+    frame.channel_id = Some(constitute_protocol::PROJECTION_CHANNEL_LOGGING_EVENTS.to_string());
     frame.audience = json!({ "servicePk": LOGGING_SERVICE_PK });
     refresh_frame_id(&mut frame);
 
@@ -872,7 +873,8 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .push(CAPABILITY_SERVICE_INTENT_INVOKE.to_string());
     service_tx
         .send(Message::Text(
-            json!({ "type": "swarm.edge.hello", "hello": service_hello }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_EDGE_WIRE_HELLO, "hello": service_hello })
+                .to_string(),
         ))
         .await
         .expect("service hello");
@@ -884,7 +886,10 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .into_text()
         .expect("service text");
     let service_accept_value = serde_json::from_str::<serde_json::Value>(&service_accept).unwrap();
-    assert_eq!(service_accept_value["type"], "swarm.edge.accept");
+    assert_eq!(
+        service_accept_value["type"],
+        constitute_protocol::SWARM_EDGE_WIRE_ACCEPT
+    );
     let service_accept_record: SwarmEdgeAccept =
         serde_json::from_value(service_accept_value["accept"].clone()).expect("service accept");
     let service_resume_issued_at = now_ms();
@@ -905,7 +910,7 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
     };
     service_tx
         .send(Message::Text(
-            json!({ "type": "swarm.edge.resume", "resume": service_resume }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_EDGE_WIRE_RESUME, "resume": service_resume }).to_string(),
         ))
         .await
         .expect("service resume");
@@ -918,7 +923,10 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .expect("service resume text");
     let service_resume_accept_value =
         serde_json::from_str::<serde_json::Value>(&service_resume_accept).unwrap();
-    assert_eq!(service_resume_accept_value["type"], "swarm.edge.accept");
+    assert_eq!(
+        service_resume_accept_value["type"],
+        constitute_protocol::SWARM_EDGE_WIRE_ACCEPT
+    );
     assert!(service_resume_accept_value.get("accept").is_some());
     assert!(service_resume_accept_value.get("session").is_some());
     assert_eq!(
@@ -934,7 +942,8 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
     browser_hello.expires_at = Some(browser_issued_at + 60_000);
     browser_tx
         .send(Message::Text(
-            json!({ "type": "swarm.edge.hello", "hello": browser_hello }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_EDGE_WIRE_HELLO, "hello": browser_hello })
+                .to_string(),
         ))
         .await
         .expect("browser hello");
@@ -947,7 +956,7 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .expect("browser text");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&browser_accept).unwrap()["type"],
-        "swarm.edge.accept"
+        constitute_protocol::SWARM_EDGE_WIRE_ACCEPT
     );
 
     let mut directory_frame = valid_frame("live-directory", "live-directory-nonce");
@@ -966,7 +975,8 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
     refresh_frame_id(&mut directory_frame);
     browser_tx
         .send(Message::Text(
-            json!({ "type": "swarm.frame", "frame": directory_frame }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_WIRE_FRAME, "frame": directory_frame })
+                .to_string(),
         ))
         .await
         .expect("send directory observe");
@@ -990,10 +1000,13 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .expect("directory route observation text");
     let directory_observation_value: serde_json::Value =
         serde_json::from_str(&directory_observation).unwrap();
-    assert_eq!(directory_observation_value["type"], "swarm.frame");
+    assert_eq!(
+        directory_observation_value["type"],
+        constitute_protocol::SWARM_WIRE_FRAME
+    );
     assert_eq!(
         directory_observation_value["frame"]["recordRef"]["kind"],
-        "route.observation"
+        constitute_protocol::RECORD_ROUTE_OBSERVATION
     );
     let directory_delivery = browser_rx
         .next()
@@ -1003,7 +1016,10 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .into_text()
         .expect("directory delivery text");
     let directory_value: serde_json::Value = serde_json::from_str(&directory_delivery).unwrap();
-    assert_eq!(directory_value["type"], "swarm.frame");
+    assert_eq!(
+        directory_value["type"],
+        constitute_protocol::SWARM_WIRE_FRAME
+    );
     assert_eq!(directory_value["frame"]["kind"], "bootstrap.gatewayHint");
     assert_eq!(
         directory_value["frame"]["body"]["encoding"], "public",
@@ -1034,7 +1050,7 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
 
     browser_tx
         .send(Message::Text(
-            json!({ "type": "swarm.frame", "frame": frame }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_WIRE_FRAME, "frame": frame }).to_string(),
         ))
         .await
         .expect("send frame");
@@ -1057,10 +1073,13 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .into_text()
         .expect("route observation text");
     let route_selected_value: serde_json::Value = serde_json::from_str(&route_selected).unwrap();
-    assert_eq!(route_selected_value["type"], "swarm.frame");
+    assert_eq!(
+        route_selected_value["type"],
+        constitute_protocol::SWARM_WIRE_FRAME
+    );
     assert_eq!(
         route_selected_value["frame"]["recordRef"]["kind"],
-        "route.observation"
+        constitute_protocol::RECORD_ROUTE_OBSERVATION
     );
 
     let service_delivery = service_rx
@@ -1071,7 +1090,7 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .into_text()
         .expect("delivery text");
     let value: serde_json::Value = serde_json::from_str(&service_delivery).unwrap();
-    assert_eq!(value["type"], "swarm.frame");
+    assert_eq!(value["type"], constitute_protocol::SWARM_WIRE_FRAME);
     assert_eq!(value["frame"]["kind"], "service.intent");
     assert_eq!(value["frame"]["audience"]["serviceRef"], SERVICE_REF);
     let member_write = browser_rx
@@ -1082,10 +1101,13 @@ async fn live_swarm_edge_socket_attaches_members_and_routes_frames() {
         .into_text()
         .expect("member write observation text");
     let member_write_value: serde_json::Value = serde_json::from_str(&member_write).unwrap();
-    assert_eq!(member_write_value["type"], "swarm.frame");
+    assert_eq!(
+        member_write_value["type"],
+        constitute_protocol::SWARM_WIRE_FRAME
+    );
     assert_eq!(
         member_write_value["frame"]["recordRef"]["kind"],
-        "route.observation"
+        constitute_protocol::RECORD_ROUTE_OBSERVATION
     );
     assert_eq!(
         member_write_value["frame"]["body"]["payload"]["record"]["state"],
@@ -1123,7 +1145,8 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
         .push(CAPABILITY_MEDIA_STREAM_PREVIEW.to_string());
     service_tx
         .send(Message::Text(
-            json!({ "type": "swarm.edge.hello", "hello": service_hello }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_EDGE_WIRE_HELLO, "hello": service_hello })
+                .to_string(),
         ))
         .await
         .expect("service hello");
@@ -1136,7 +1159,7 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
         .expect("service text");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&service_accept).unwrap()["type"],
-        "swarm.edge.accept"
+        constitute_protocol::SWARM_EDGE_WIRE_ACCEPT
     );
 
     let (browser_ws, _) = connect_async(&url).await.expect("browser connect");
@@ -1148,7 +1171,8 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
     browser_hello.channel_refs.push("nvr.streams".to_string());
     browser_tx
         .send(Message::Text(
-            json!({ "type": "swarm.edge.hello", "hello": browser_hello }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_EDGE_WIRE_HELLO, "hello": browser_hello })
+                .to_string(),
         ))
         .await
         .expect("browser hello");
@@ -1161,7 +1185,7 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
         .expect("browser text");
     assert_eq!(
         serde_json::from_str::<serde_json::Value>(&browser_accept).unwrap()["type"],
-        "swarm.edge.accept"
+        constitute_protocol::SWARM_EDGE_WIRE_ACCEPT
     );
 
     let issued_at = now_ms();
@@ -1172,7 +1196,7 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
     frame.expires_at = Some(issued_at + 60_000);
     frame.channel_id = Some("nvr.streams".to_string());
     frame.record_ref = Some(SwarmRecordRef {
-        kind: "stream.session.offer".to_string(),
+        kind: constitute_protocol::RECORD_STREAM_SESSION_OFFER.to_string(),
         id: "silent-stream-offer".to_string(),
         revision: None,
     });
@@ -1181,7 +1205,7 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
 
     browser_tx
         .send(Message::Text(
-            json!({ "type": "swarm.frame", "frame": frame }).to_string(),
+            json!({ "type": constitute_protocol::SWARM_WIRE_FRAME, "frame": frame }).to_string(),
         ))
         .await
         .expect("send stream frame");
@@ -1211,7 +1235,7 @@ async fn live_swarm_edge_closes_silent_stream_member_after_write_witness_timeout
         .into_text()
         .expect("delivery text");
     let service_value: serde_json::Value = serde_json::from_str(&service_delivery).unwrap();
-    assert_eq!(service_value["type"], "swarm.frame");
+    assert_eq!(service_value["type"], constitute_protocol::SWARM_WIRE_FRAME);
     assert_eq!(
         service_value["frame"]["capability"],
         CAPABILITY_STREAM_SESSION_OFFER

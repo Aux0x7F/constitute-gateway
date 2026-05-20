@@ -2,6 +2,7 @@
 //!
 //! The wire protocol accepts only edge control records and `SwarmFrame` records.
 //! Service semantics stay inside attached edge members.
+// domain-owned-vocabulary: swarm.directory
 
 use anyhow::{anyhow, Context, Result};
 use constitute_protocol::{
@@ -147,7 +148,7 @@ async fn handle_client(
                     }
                     continue;
                 };
-                if matches!(edge_record_type(&text).as_deref(), Some("swarm.frame")) {
+                if matches!(edge_record_type(&text).as_deref(), Some(constitute_protocol::SWARM_WIRE_FRAME)) {
                     if let Some(pending) = pending_read_witness.as_ref() {
                         if edge_frame_correlates_to(&text, &pending.frame_id) {
                             let pending = pending_read_witness.take().expect("pending witness exists");
@@ -209,7 +210,7 @@ async fn handle_client(
                             break;
                         }
                         let outbound = json!({
-                            "type": "swarm.frame",
+                            "type": constitute_protocol::SWARM_WIRE_FRAME,
                             "frame": delivery.frame,
                         });
                         match timeout(
@@ -291,7 +292,7 @@ async fn handle_wire_message(
         .unwrap_or_default()
         .trim();
     match record_type {
-        "swarm.edge.hello" => {
+        constitute_protocol::SWARM_EDGE_WIRE_HELLO => {
             let hello: SwarmEdgeHello = match parse_record_field(&value, "hello") {
                 Ok(hello) => hello,
                 Err(err) => return Some(reject_value("invalid_hello", err, None)),
@@ -304,16 +305,17 @@ async fn handle_wire_message(
                     *member_ref = attach.session.member_ref.clone();
                     *member_kind = Some(kind);
                     Some(json!({
-                        "type": "swarm.edge.accept",
+                        "type": constitute_protocol::SWARM_EDGE_WIRE_ACCEPT,
                         "accept": attach.accept,
                     }))
                 }
-                SwarmEdgeAttachResult::Rejected(reject) => {
-                    Some(reject_wire_value("swarm.edge.reject", reject))
-                }
+                SwarmEdgeAttachResult::Rejected(reject) => Some(reject_wire_value(
+                    constitute_protocol::SWARM_EDGE_WIRE_REJECT,
+                    reject,
+                )),
             }
         }
-        "swarm.edge.resume" => {
+        constitute_protocol::SWARM_EDGE_WIRE_RESUME => {
             let resume: SwarmEdgeResume = match parse_record_field(&value, "resume") {
                 Ok(resume) => resume,
                 Err(err) => return Some(reject_value("invalid_resume", err, None)),
@@ -328,18 +330,19 @@ async fn handle_wire_message(
                     *member_ref = session.member_ref.clone();
                     *member_kind = Some(kind);
                     Some(json!({
-                        "type": "swarm.edge.accept",
+                        "type": constitute_protocol::SWARM_EDGE_WIRE_ACCEPT,
                         "sessionId": session.session_id,
                         "accept": accept,
                         "session": session,
                     }))
                 }
-                SwarmEdgeResumeResult::Rejected(reject) => {
-                    Some(reject_wire_value("swarm.edge.reject", reject))
-                }
+                SwarmEdgeResumeResult::Rejected(reject) => Some(reject_wire_value(
+                    constitute_protocol::SWARM_EDGE_WIRE_REJECT,
+                    reject,
+                )),
             }
         }
-        "swarm.frame" => {
+        constitute_protocol::SWARM_WIRE_FRAME => {
             if session_id.trim().is_empty() {
                 return Some(reject_value(
                     "missing_session",
@@ -379,7 +382,7 @@ async fn handle_wire_message(
                         });
                     }
                     Some(json!({
-                        "type": "swarm.frame",
+                        "type": constitute_protocol::SWARM_WIRE_FRAME,
                         "frame": receipt.response,
                         "propagation": receipt.propagation,
                         "routeObservations": receipt.route_observations,
@@ -387,9 +390,10 @@ async fn handle_wire_message(
                         "bridge": receipt.bridge,
                     }))
                 }
-                SwarmEdgeIngressResult::Rejected(reject) => {
-                    Some(reject_wire_value("swarm.edge.reject", reject))
-                }
+                SwarmEdgeIngressResult::Rejected(reject) => Some(reject_wire_value(
+                    constitute_protocol::SWARM_EDGE_WIRE_REJECT,
+                    reject,
+                )),
             }
         }
         other => Some(reject_value(
@@ -494,7 +498,7 @@ fn edge_member_kind(value: &str) -> SwarmEdgeMemberKind {
 
 fn reject_value(reason_code: &str, err: anyhow::Error, correlation_id: Option<String>) -> Value {
     reject_wire_value(
-        "swarm.edge.reject",
+        constitute_protocol::SWARM_EDGE_WIRE_REJECT,
         SwarmEdgeReject {
             reason_code: reason_code.to_string(),
             detail: err.to_string(),
@@ -556,7 +560,7 @@ mod tests {
             CAPABILITY_MEDIA_STREAM_PREVIEW
         ))));
         assert!(!frame_requires_member_read_witness(&test_frame(Some(
-            "stream.session.answer"
+            constitute_protocol::RECORD_STREAM_SESSION_ANSWER
         ))));
         assert!(!frame_requires_member_read_witness(&test_frame(None)));
     }
@@ -564,14 +568,14 @@ mod tests {
     #[test]
     fn edge_frame_witness_requires_matching_correlation() {
         let unrelated = json!({
-            "type": "swarm.frame",
+            "type": constitute_protocol::SWARM_WIRE_FRAME,
             "frame": {
                 "frameId": "projection-frame",
                 "correlationId": "projection-repair"
             }
         });
         let admission = json!({
-            "type": "swarm.frame",
+            "type": constitute_protocol::SWARM_WIRE_FRAME,
             "frame": {
                 "frameId": "admission-frame",
                 "correlationId": "offer-frame"
