@@ -3,6 +3,7 @@
 //! This module is intentionally transport-neutral. HTTP, WebSocket, Nostr, UDP,
 //! and QUIC callers can adapt bytes into protocol records, but swarm frames are
 //! the semantic runtime boundary handled here.
+// domain-owned-vocabulary: swarm.directory swarm.directory.live swarm.route
 
 use anyhow::{anyhow, Result};
 use constitute_protocol::{
@@ -573,6 +574,8 @@ pub struct ProjectionBridge {
     pub channel_id: Option<String>,
     pub projection_ref: Option<String>,
     pub delta: bool,
+    pub materialization_budget_ref: Option<String>,
+    pub consumer_floor_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -604,6 +607,14 @@ pub fn bridge_service_frame(frame: &SwarmFrame) -> Option<ServiceBridgeRecord> {
                 channel_id: frame.channel_id.clone(),
                 projection_ref: frame.record_ref.as_ref().map(|record| record.id.clone()),
                 delta: matches!(frame.kind, SwarmFrameKind::ProjectionDelta),
+                materialization_budget_ref: frame
+                    .channel_id
+                    .as_ref()
+                    .map(|channel| format!("materialization:gateway:{channel}:bridge")),
+                consumer_floor_ref: frame
+                    .channel_id
+                    .as_ref()
+                    .map(|channel| format!("consumer-floor:gateway:{channel}:service-bridge")),
             }))
         }
         SwarmFrameKind::StoragePinIntent | SwarmFrameKind::StoragePinAttestation => {
@@ -877,11 +888,11 @@ impl SwarmEdgeCore {
             correlation_id: Some(source.frame_id.clone()),
             channel_id: Some("swarm.route".to_string()),
             record_ref: Some(SwarmRecordRef {
-                kind: "route.observation".to_string(),
+                kind: constitute_protocol::RECORD_ROUTE_OBSERVATION.to_string(),
                 id: observation.observation_id.clone(),
                 revision: Some(now),
             }),
-            capability: Some("route.observation.publish".to_string()),
+            capability: Some(constitute_protocol::CAPABILITY_ROUTE_OBSERVATION_PUBLISH.to_string()),
             body: SwarmFrameBody {
                 encoding: "caac".to_string(),
                 envelope: Some(json!({
@@ -1234,7 +1245,7 @@ impl SwarmEdgeHub {
                         "kind": "edge",
                         "displayName": channel_id,
                         "capabilities": capability_refs,
-                        "recordKinds": ["swarm.frame"],
+                        "recordKinds": [constitute_protocol::SWARM_WIRE_FRAME],
                         "ownerRefs": [member_ref],
                         "policyRef": policy_id,
                         "createdAt": now,

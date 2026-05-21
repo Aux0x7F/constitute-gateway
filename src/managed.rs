@@ -750,7 +750,7 @@ fn storage_capabilities(manifest: &HostedStorageManifest) -> Value {
             "encrypted_index_shards",
             "key_grants",
             "pin_leases",
-            "surface.app.distribution.pin",
+            constitute_protocol::CAPABILITY_SURFACE_APP_DISTRIBUTION_PIN,
             "prune",
             "local_search",
             "watch"
@@ -2132,6 +2132,7 @@ mod tests {
             .as_array()
             .expect("capability array")
             .iter()
-            .any(|value| value.as_str() == Some("surface.app.distribution.pin")));
+            .any(|value| value.as_str()
+                == Some(constitute_protocol::CAPABILITY_SURFACE_APP_DISTRIBUTION_PIN)));
     }
 }

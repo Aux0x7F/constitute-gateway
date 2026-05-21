@@ -1062,27 +1062,45 @@ async fn main() -> Result<()> {
     let hosted_services_self_sk = cfg.nostr_sk_hex.clone();
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        let hosted_services_materialization_floor = Duration::from_secs(60);
+        let mut hosted_services_last_fingerprint = String::new();
+        let mut hosted_services_last_published_at =
+            Instant::now() - hosted_services_materialization_floor;
         loop {
             ticker.tick().await;
-            let snapshot = managed::load_hosted_services_snapshot(
+            let bounded_hosted_services_snapshot = managed::load_hosted_services_snapshot(
                 &hosted_services_client,
                 &hosted_services_gateway_pk,
             )
             .await;
-            if hosted_services_tx.send(snapshot.clone()).is_err() {
-                break;
+            let hosted_services_fingerprint =
+                serde_json::to_string(&bounded_hosted_services_snapshot).unwrap_or_default();
+            let hosted_services_changed =
+                hosted_services_fingerprint != hosted_services_last_fingerprint;
+            let hosted_services_floor_elapsed = hosted_services_last_published_at.elapsed()
+                >= hosted_services_materialization_floor;
+            if !hosted_services_changed && !hosted_services_floor_elapsed {
+                continue;
             }
             publish_current_device_record(
                 &hosted_services_self_pk,
                 &hosted_services_self_sk,
                 &hosted_services_device_record,
-                &snapshot,
+                &bounded_hosted_services_snapshot,
                 &hosted_services_zones,
                 &hosted_services_store,
                 &hosted_services_relay_pool,
                 &hosted_services_local_relay,
             )
             .await;
+            hosted_services_last_fingerprint = hosted_services_fingerprint;
+            hosted_services_last_published_at = Instant::now();
+            if hosted_services_tx
+                .send(bounded_hosted_services_snapshot)
+                .is_err()
+            {
+                break;
+            }
         }
     });
 
