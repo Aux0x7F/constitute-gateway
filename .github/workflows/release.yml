@@ -15,6 +15,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Checkout protocol dependency
+        run: bash scripts/ci/checkout-protocol-dependency.sh
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -42,6 +45,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Checkout protocol dependency
+        run: bash scripts/ci/checkout-protocol-dependency.sh
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
