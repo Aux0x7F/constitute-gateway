@@ -4,15 +4,15 @@
 //! zone-scoped gateway presence signaling.
 
 use anyhow::Result;
+use constitute_fabric::{reduce_host_fabric, HostFabricReductionInput, HostFabricRoleRequirement};
 use constitute_protocol::{
-    validate_host_fabric_fulfillment_plan, validate_host_fabric_member_contribution,
-    validate_lifecycle_plan_posture, validate_substrate_association_handoff,
-    HostFabricFulfillmentPlan, HostFabricMemberContribution, LifecyclePhasePosture,
-    LifecyclePlanPosture, SubstrateAssociationHandoff, FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF,
-    FABRIC_FULFILLMENT_PLAN_READY, FABRIC_LIFECYCLE_PHASE_OBSERVE, FABRIC_LIFECYCLE_PHASE_READY,
-    FABRIC_LIFECYCLE_PHASE_RUN, FABRIC_LIFECYCLE_PHASE_RUNNING, FABRIC_LIFECYCLE_PHASE_SOURCE,
-    FABRIC_LIFECYCLE_PLAN_READY, FABRIC_MEMBER_CONTRIBUTION_RUNNING,
-    FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION, RECORD_HOST_FABRIC_FULFILLMENT_PLAN,
+    validate_host_fabric_member_contribution, validate_lifecycle_plan_posture,
+    validate_substrate_association_handoff, HostFabricFulfillmentPlan,
+    HostFabricMemberContribution, LifecyclePhasePosture, LifecyclePlanPosture,
+    SubstrateAssociationHandoff, FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF,
+    FABRIC_LIFECYCLE_PHASE_OBSERVE, FABRIC_LIFECYCLE_PHASE_READY, FABRIC_LIFECYCLE_PHASE_RUN,
+    FABRIC_LIFECYCLE_PHASE_RUNNING, FABRIC_LIFECYCLE_PHASE_SOURCE, FABRIC_LIFECYCLE_PLAN_READY,
+    FABRIC_MEMBER_CONTRIBUTION_RUNNING, FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION,
     RECORD_HOST_FABRIC_MEMBER_CONTRIBUTION, RECORD_LIFECYCLE_PLAN_POSTURE,
     RECORD_SUBSTRATE_ASSOCIATION_HANDOFF,
 };
@@ -559,8 +559,7 @@ pub fn gateway_association_posture(
     };
     validate_lifecycle_plan_posture(&lifecycle_plan)?;
 
-    let fulfillment_plan = HostFabricFulfillmentPlan {
-        kind: Some(RECORD_HOST_FABRIC_FULFILLMENT_PLAN.to_string()),
+    let fulfillment_plan = reduce_host_fabric(HostFabricReductionInput {
         plan_id: format!(
             "fabric-plan:gateway-association:{}",
             short_ref(&record.device_pk)
@@ -568,20 +567,21 @@ pub fn gateway_association_posture(
         fabric_ref,
         host_ref,
         contract_ref: "contract:gateway-association@0.1.0".to_string(),
-        state: FABRIC_FULFILLMENT_PLAN_READY.to_string(),
-        required_role_refs: vec![format!("role:{FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION}")],
-        member_contribution_refs: vec![contribution.contribution_id.clone()],
-        missing_role_refs: vec![],
-        lifecycle_plan_refs: vec![lifecycle_plan.lifecycle_plan_id.clone()],
+        required_roles: vec![HostFabricRoleRequirement {
+            role_ref: format!("role:{FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION}"),
+            min_ready: 1,
+        }],
+        contributions: vec![contribution.clone()],
+        lifecycle_plans: vec![lifecycle_plan.clone()],
         materialization_budget_refs: vec!["materialization-budget:gateway-association".to_string()],
-        association_handoff_ref: Some(handoff.handoff_id.clone()),
+        known_missing_role_refs: vec![],
         evidence_refs: vec![format!("evidence:fabric-plan:{}", record.device_pk)],
         blocked_reasons: vec![],
-        safe_facts: Value::Null,
+        association_handoff_ref: Some(handoff.handoff_id.clone()),
         observed_at,
         expires_at: Some(observed_at + RECORD_TTL_MS),
-    };
-    validate_host_fabric_fulfillment_plan(&fulfillment_plan)?;
+    })?
+    .fulfillment_plan;
 
     Ok(GatewayAssociationPosture {
         substrate_association_handoff: handoff,

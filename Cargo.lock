@@ -1019,6 +1019,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "constitute-fabric"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "constitute-protocol",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "constitute-gateway"
 version = "0.1.3"
 dependencies = [
@@ -1030,6 +1040,7 @@ dependencies = [
  "cbc",
  "chacha20poly1305",
  "clap",
+ "constitute-fabric",
  "constitute-protocol",
  "eframe",
  "futures-util",
