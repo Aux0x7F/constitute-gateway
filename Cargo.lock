@@ -1021,6 +1021,7 @@ dependencies = [
 [[package]]
 name = "constitute-fabric"
 version = "0.1.0"
+source = "git+https://github.com/Aux0x7F/constitute-fabric?branch=main#433f54397fdee6f5619f9de408b4a307143a0191"
 dependencies = [
  "anyhow",
  "constitute-protocol",
@@ -1067,6 +1068,7 @@ dependencies = [
 [[package]]
 name = "constitute-protocol"
 version = "0.1.0"
+source = "git+https://github.com/Aux0x7F/constitute-protocol?branch=main#e0db94216f0a57bf427086f225156db4625717cd"
 dependencies = [
  "anyhow",
  "base64",
