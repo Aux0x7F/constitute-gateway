@@ -7,10 +7,11 @@
 
 use anyhow::{anyhow, Result};
 use constitute_protocol::{
-    swarm_frame_id, validate_swarm_edge_hello, validate_swarm_edge_resume, validate_swarm_frame,
-    SwarmAck, SwarmEdgeAccept, SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody,
-    SwarmFrameKind, SwarmRecordRef, ZoneScope, CAPABILITY_PROJECTION_OBSERVE,
-    CAPABILITY_SWARM_EDGE_ATTACH, SWARM_FRAME_VERSION,
+    swarm_frame_id, validate_member_presence, validate_swarm_edge_hello,
+    validate_swarm_edge_resume, validate_swarm_frame, MemberPresence, SwarmAck, SwarmEdgeAccept,
+    SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody, SwarmFrameKind, SwarmRecordRef,
+    ZoneScope, CAPABILITY_PROJECTION_OBSERVE, CAPABILITY_SWARM_EDGE_ATTACH, RECORD_MEMBER_PRESENCE,
+    SWARM_FRAME_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1166,6 +1167,7 @@ impl SwarmEdgeHub {
         let mut definitions = BTreeMap::<String, Value>::new();
         let mut channels = BTreeMap::<String, Value>::new();
         let mut policies = BTreeMap::<String, Value>::new();
+        let mut membership_truth = Vec::<Value>::new();
         let mut advertisements = Vec::<Value>::new();
         let mut entries = Vec::<Value>::new();
         let mut sessions = self
@@ -1208,6 +1210,21 @@ impl SwarmEdgeHub {
             channel_refs.sort();
             channel_refs.dedup();
 
+            let presence = MemberPresence {
+                kind: Some(RECORD_MEMBER_PRESENCE.to_string()),
+                member_ref: member_ref.to_string(),
+                member_kind: session.member_kind.clone(),
+                capability_refs: capability_refs.clone(),
+                channel_refs: channel_refs.clone(),
+                issued_at: session.issued_at,
+                expires_at: session.expires_at,
+            };
+            if validate_member_presence(&presence, now).is_ok() {
+                if let Ok(value) = serde_json::to_value(&presence) {
+                    membership_truth.push(value);
+                }
+            }
+
             for capability in &capability_refs {
                 definitions.entry(capability.clone()).or_insert_with(|| {
                     json!({
@@ -1230,8 +1247,9 @@ impl SwarmEdgeHub {
                     "zoneScope": &session.zone_scope,
                     "channelRefs": channel_refs,
                     "memberSource": "attachedSessionAdvertisement",
+                    "memberPresenceRef": format!("member-presence:{}:{}", slug(member_ref), slug(&session.session_id)),
                     "authorityDomains": ["gateway", "service"],
-                    "recordBackedMembership": false,
+                    "recordBackedMembership": true,
                     "issuedAt": now,
                     "expiresAt": now.saturating_add(90_000),
                 }));
@@ -1274,8 +1292,9 @@ impl SwarmEdgeHub {
                         "promiseRefs": &promise_refs,
                         "zoneScope": &session.zone_scope,
                         "memberSource": "attachedSessionAdvertisement",
+                        "memberPresenceRef": format!("member-presence:{}:{}", slug(member_ref), slug(&session.session_id)),
                         "authorityDomains": ["gateway", "service"],
-                        "recordBackedMembership": false,
+                        "recordBackedMembership": true,
                         "priority": 10,
                     }));
                 }
@@ -1286,10 +1305,11 @@ impl SwarmEdgeHub {
             "classification": {
                 "directoryTruthSource": "attachedSessionAdvertisement",
                 "attachedHelloBoundary": "attachedSessionObservation",
-                "recordBackedMembership": false,
+                "membershipTruthSource": "edgeSessionMemberPresence",
+                "recordBackedMembership": !membership_truth.is_empty(),
                 "nostrBoundary": "bootstrapFallback",
             },
-            "membershipTruth": [],
+            "membershipTruth": membership_truth,
             "definitions": definitions.into_values().collect::<Vec<_>>(),
             "advertisements": advertisements,
             "entries": entries,
