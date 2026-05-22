@@ -799,8 +799,18 @@ fn live_directory_omits_disconnected_edge_sessions() {
         before["classification"]["directoryTruthSource"],
         "attachedSessionAdvertisement"
     );
-    assert_eq!(before["classification"]["recordBackedMembership"], false);
-    assert!(before["membershipTruth"].as_array().unwrap().is_empty());
+    assert_eq!(
+        before["classification"]["membershipTruthSource"],
+        "edgeSessionMemberPresence"
+    );
+    assert_eq!(before["classification"]["recordBackedMembership"], true);
+    assert!(before["membershipTruth"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|presence| presence["kind"] == "member.presence"
+            && presence["memberRef"] == CLI_PK
+            && presence["memberKind"] == "cli"));
     assert!(before["advertisements"]
         .as_array()
         .unwrap()
@@ -817,7 +827,11 @@ fn live_directory_omits_disconnected_edge_sessions() {
         .iter()
         .any(|ad| ad["memberRef"] == CLI_PK
             && ad["memberSource"] == "attachedSessionAdvertisement"
-            && ad["recordBackedMembership"] == false));
+            && ad["recordBackedMembership"] == true
+            && ad["memberPresenceRef"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("member-presence:")));
     assert!(before["entries"]
         .as_array()
         .unwrap()
