@@ -4,6 +4,18 @@
 //! zone-scoped gateway presence signaling.
 
 use anyhow::Result;
+use constitute_protocol::{
+    validate_host_fabric_fulfillment_plan, validate_host_fabric_member_contribution,
+    validate_lifecycle_plan_posture, validate_substrate_association_handoff,
+    HostFabricFulfillmentPlan, HostFabricMemberContribution, LifecyclePhasePosture,
+    LifecyclePlanPosture, SubstrateAssociationHandoff, FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF,
+    FABRIC_FULFILLMENT_PLAN_READY, FABRIC_LIFECYCLE_PHASE_OBSERVE, FABRIC_LIFECYCLE_PHASE_READY,
+    FABRIC_LIFECYCLE_PHASE_RUN, FABRIC_LIFECYCLE_PHASE_RUNNING, FABRIC_LIFECYCLE_PHASE_SOURCE,
+    FABRIC_LIFECYCLE_PLAN_READY, FABRIC_MEMBER_CONTRIBUTION_RUNNING,
+    FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION, RECORD_HOST_FABRIC_FULFILLMENT_PLAN,
+    RECORD_HOST_FABRIC_MEMBER_CONTRIBUTION, RECORD_LIFECYCLE_PLAN_POSTURE,
+    RECORD_SUBSTRATE_ASSOCIATION_HANDOFF,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -19,6 +31,15 @@ const APP_KIND: u32 = 1;
 const APP_TAG: &str = "constitute";
 const SUB_ID: &str = "constitute_sub_v2";
 const RECORD_TTL_MS: u64 = 24 * 60 * 60 * 1000;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GatewayAssociationPosture {
+    pub substrate_association_handoff: SubstrateAssociationHandoff,
+    pub gateway_association_contribution: HostFabricMemberContribution,
+    pub lifecycle_plan: LifecyclePlanPosture,
+    pub fulfillment_plan: HostFabricFulfillmentPlan,
+}
 
 pub fn relay_req_json() -> String {
     let filters = vec![
@@ -168,7 +189,7 @@ impl SwarmDeviceRecord {
     }
 
     fn as_json_value(&self) -> serde_json::Value {
-        json!({
+        let mut value = json!({
             "devicePk": self.device_pk,
             "identityId": self.identity_id,
             "deviceLabel": self.device_label,
@@ -191,7 +212,16 @@ impl SwarmDeviceRecord {
                 .iter()
                 .map(HostedServiceRecord::as_json_value)
                 .collect::<Vec<_>>(),
-        })
+        });
+        if let Ok(posture) = gateway_association_posture(self, self.updated_at) {
+            if let Some(object) = value.as_object_mut() {
+                object.insert(
+                    "gatewayAssociationPosture".to_string(),
+                    serde_json::to_value(posture).unwrap_or(Value::Null),
+                );
+            }
+        }
+        value
     }
 }
 
@@ -408,6 +438,179 @@ fn gateway_service_surface_record(record: &SwarmDeviceRecord) -> HostedServiceRe
     }
 }
 
+pub fn gateway_association_posture(
+    record: &SwarmDeviceRecord,
+    observed_at: u64,
+) -> Result<GatewayAssociationPosture> {
+    let fabric_ref = gateway_fabric_ref(record);
+    let host_ref = gateway_host_ref(record);
+    let gateway_association_ref = gateway_association_ref(record);
+    let handoff = SubstrateAssociationHandoff {
+        kind: Some(RECORD_SUBSTRATE_ASSOCIATION_HANDOFF.to_string()),
+        handoff_id: format!(
+            "handoff:gateway:{}:initial-owner",
+            short_ref(&record.device_pk)
+        ),
+        substrate_ref: "substrate:first-trust:gateway".to_string(),
+        host_ref: host_ref.clone(),
+        owner_ref: record.identity_id.clone(),
+        fabric_ref: fabric_ref.clone(),
+        state: FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF.to_string(),
+        initial_association_refs: vec![format!(
+            "association:substrate:{}:{}",
+            record.identity_id,
+            short_ref(&record.device_pk)
+        )],
+        gateway_association_refs: vec![gateway_association_ref.clone()],
+        evidence_refs: vec![format!("evidence:gateway-association:{}", record.device_pk)],
+        blocked_reasons: vec![],
+        safe_facts: json!({
+            "handoff": "substrate-to-gateway-association",
+            "role": record.role,
+            "hostPlatform": record.host_platform
+        }),
+        issued_at: observed_at.saturating_sub(1),
+        handed_off_at: Some(observed_at),
+        expires_at: Some(observed_at + RECORD_TTL_MS),
+    };
+    validate_substrate_association_handoff(&handoff)?;
+
+    let contribution = HostFabricMemberContribution {
+        kind: Some(RECORD_HOST_FABRIC_MEMBER_CONTRIBUTION.to_string()),
+        contribution_id: format!(
+            "fabric-contribution:gateway-association:{}",
+            short_ref(&record.device_pk)
+        ),
+        fabric_ref: fabric_ref.clone(),
+        host_ref: host_ref.clone(),
+        member_ref: record.device_pk.clone(),
+        role: FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION.to_string(),
+        state: FABRIC_MEMBER_CONTRIBUTION_RUNNING.to_string(),
+        contract_ref: "contract:gateway-association@0.1.0".to_string(),
+        subject_ref: gateway_association_ref.clone(),
+        capability_refs: vec!["gateway.association.fulfill".to_string()],
+        grant_refs: vec![format!("grant:gateway-association:{}", record.identity_id)],
+        input_refs: vec![handoff.handoff_id.clone()],
+        output_refs: vec![format!(
+            "projection:gateway-association:{}",
+            record.device_pk
+        )],
+        evidence_refs: vec![format!("evidence:gateway-presence:{}", record.device_pk)],
+        lifecycle_plan_refs: vec![format!(
+            "lifecycle-plan:gateway-association:{}",
+            short_ref(&record.device_pk)
+        )],
+        release_refs: vec![format!("release:gateway:{}", record.service_version)],
+        resource_posture: None,
+        blocked_reasons: vec![],
+        safe_facts: json!({
+            "role": FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION,
+            "serviceVersion": record.service_version,
+            "releaseTrack": record.release_track
+        }),
+        observed_at,
+        expires_at: Some(observed_at + RECORD_TTL_MS),
+    };
+    validate_host_fabric_member_contribution(&contribution)?;
+
+    let lifecycle_plan = LifecyclePlanPosture {
+        kind: Some(RECORD_LIFECYCLE_PLAN_POSTURE.to_string()),
+        lifecycle_plan_id: contribution.lifecycle_plan_refs[0].clone(),
+        subject_ref: gateway_association_ref.clone(),
+        contract_ref: "contract:lifecycle.gateway-association@0.1.0".to_string(),
+        state: FABRIC_LIFECYCLE_PLAN_READY.to_string(),
+        lifecycle_contract_refs: vec!["contract:lifecycle.gateway-association@0.1.0".to_string()],
+        phase_postures: vec![
+            LifecyclePhasePosture {
+                phase: FABRIC_LIFECYCLE_PHASE_SOURCE.to_string(),
+                state: FABRIC_LIFECYCLE_PHASE_READY.to_string(),
+                evidence_refs: vec![format!("evidence:gateway-source:{}", record.device_pk)],
+                output_refs: vec![format!("source:gateway:{}", record.service_version)],
+                blocked_reasons: vec![],
+                safe_facts: Value::Null,
+            },
+            LifecyclePhasePosture {
+                phase: FABRIC_LIFECYCLE_PHASE_RUN.to_string(),
+                state: FABRIC_LIFECYCLE_PHASE_RUNNING.to_string(),
+                evidence_refs: vec![format!("evidence:gateway-running:{}", record.device_pk)],
+                output_refs: vec![gateway_association_ref.clone()],
+                blocked_reasons: vec![],
+                safe_facts: Value::Null,
+            },
+            LifecyclePhasePosture {
+                phase: FABRIC_LIFECYCLE_PHASE_OBSERVE.to_string(),
+                state: FABRIC_LIFECYCLE_PHASE_READY.to_string(),
+                evidence_refs: vec![format!("evidence:gateway-observed:{}", record.device_pk)],
+                output_refs: vec!["projection:gateway-association:hot".to_string()],
+                blocked_reasons: vec![],
+                safe_facts: Value::Null,
+            },
+        ],
+        member_contribution_refs: vec![contribution.contribution_id.clone()],
+        evidence_refs: vec![format!(
+            "evidence:lifecycle:gateway-association:{}",
+            record.device_pk
+        )],
+        release_refs: contribution.release_refs.clone(),
+        blocked_reasons: vec![],
+        safe_facts: Value::Null,
+        observed_at,
+        expires_at: Some(observed_at + RECORD_TTL_MS),
+    };
+    validate_lifecycle_plan_posture(&lifecycle_plan)?;
+
+    let fulfillment_plan = HostFabricFulfillmentPlan {
+        kind: Some(RECORD_HOST_FABRIC_FULFILLMENT_PLAN.to_string()),
+        plan_id: format!(
+            "fabric-plan:gateway-association:{}",
+            short_ref(&record.device_pk)
+        ),
+        fabric_ref,
+        host_ref,
+        contract_ref: "contract:gateway-association@0.1.0".to_string(),
+        state: FABRIC_FULFILLMENT_PLAN_READY.to_string(),
+        required_role_refs: vec![format!("role:{FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION}")],
+        member_contribution_refs: vec![contribution.contribution_id.clone()],
+        missing_role_refs: vec![],
+        lifecycle_plan_refs: vec![lifecycle_plan.lifecycle_plan_id.clone()],
+        materialization_budget_refs: vec!["materialization-budget:gateway-association".to_string()],
+        association_handoff_ref: Some(handoff.handoff_id.clone()),
+        evidence_refs: vec![format!("evidence:fabric-plan:{}", record.device_pk)],
+        blocked_reasons: vec![],
+        safe_facts: Value::Null,
+        observed_at,
+        expires_at: Some(observed_at + RECORD_TTL_MS),
+    };
+    validate_host_fabric_fulfillment_plan(&fulfillment_plan)?;
+
+    Ok(GatewayAssociationPosture {
+        substrate_association_handoff: handoff,
+        gateway_association_contribution: contribution,
+        lifecycle_plan,
+        fulfillment_plan,
+    })
+}
+
+fn gateway_fabric_ref(record: &SwarmDeviceRecord) -> String {
+    format!("fabric:gateway:{}", short_ref(&record.device_pk))
+}
+
+fn gateway_host_ref(record: &SwarmDeviceRecord) -> String {
+    format!("host:gateway:{}", short_ref(&record.device_pk))
+}
+
+fn gateway_association_ref(record: &SwarmDeviceRecord) -> String {
+    format!(
+        "association:gateway:{}:ongoing",
+        short_ref(&record.device_pk)
+    )
+}
+
+fn short_ref(value: &str) -> String {
+    let trimmed = value.trim();
+    trimmed.chars().take(12).collect()
+}
+
 fn now_ms() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -446,7 +649,7 @@ pub fn service_version() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{HostedServiceRecord, SwarmDeviceRecord};
+    use super::{gateway_association_posture, HostedServiceRecord, SwarmDeviceRecord};
     use serde_json::json;
 
     #[test]
@@ -491,5 +694,45 @@ mod tests {
         assert!(json.contains("\"service\":\"nvr\""));
         assert!(json.contains("\"service\":\"gateway\""));
         assert!(json.contains("\"surfaceChannel\":\"gateway.surface\""));
+    }
+
+    #[test]
+    fn gateway_record_projects_association_handoff_and_fabric_contribution() {
+        let gateway_pk = "4a29ff60c5c3837e9e20555bfeb2a046be3eb140818144628691fcf7efb1d2f1";
+        let record = SwarmDeviceRecord::new(
+            gateway_pk,
+            "identity:aux",
+            "DevGateway",
+            "gateway",
+            vec!["ws://gateway.example:7447".to_string()],
+            "ws://gateway.example:7448",
+            "linux",
+            "release",
+            "latest",
+            "",
+        );
+        let posture = gateway_association_posture(&record, 1_700_000_000).expect("posture");
+
+        assert_eq!(
+            posture.substrate_association_handoff.state,
+            constitute_protocol::FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF
+        );
+        assert_eq!(
+            posture.gateway_association_contribution.role,
+            constitute_protocol::FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION
+        );
+        assert_eq!(
+            posture.fulfillment_plan.state,
+            constitute_protocol::FABRIC_FULFILLMENT_PLAN_READY
+        );
+        assert_eq!(
+            posture.fulfillment_plan.association_handoff_ref,
+            Some(posture.substrate_association_handoff.handoff_id.clone())
+        );
+
+        let json = record.to_json();
+        assert!(json.contains("\"gatewayAssociationPosture\""));
+        assert!(json.contains("\"hostFabric.member.contribution\""));
+        assert!(json.contains("\"substrate.association.handoff\""));
     }
 }
