@@ -6,15 +6,16 @@
 use anyhow::Result;
 use constitute_fabric::{reduce_host_fabric, HostFabricReductionInput, HostFabricRoleRequirement};
 use constitute_protocol::{
-    validate_host_fabric_member_contribution, validate_lifecycle_plan_posture,
-    validate_substrate_association_handoff, HostFabricFulfillmentPlan,
-    HostFabricMemberContribution, LifecyclePhasePosture, LifecyclePlanPosture,
-    SubstrateAssociationHandoff, FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF,
+    validate_association_boundary_proof, validate_host_fabric_member_contribution,
+    validate_lifecycle_plan_posture, validate_substrate_association_handoff,
+    AssociationBoundaryProof, HostFabricFulfillmentPlan, HostFabricMemberContribution,
+    LifecyclePhasePosture, LifecyclePlanPosture, SubstrateAssociationHandoff,
+    FABRIC_ASSOCIATION_BOUNDARY_PROOF_READY, FABRIC_ASSOCIATION_HANDOFF_HANDED_OFF,
     FABRIC_LIFECYCLE_PHASE_OBSERVE, FABRIC_LIFECYCLE_PHASE_READY, FABRIC_LIFECYCLE_PHASE_RUN,
     FABRIC_LIFECYCLE_PHASE_RUNNING, FABRIC_LIFECYCLE_PHASE_SOURCE, FABRIC_LIFECYCLE_PLAN_READY,
     FABRIC_MEMBER_CONTRIBUTION_RUNNING, FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION,
-    RECORD_HOST_FABRIC_MEMBER_CONTRIBUTION, RECORD_LIFECYCLE_PLAN_POSTURE,
-    RECORD_SUBSTRATE_ASSOCIATION_HANDOFF,
+    RECORD_ASSOCIATION_BOUNDARY_PROOF, RECORD_HOST_FABRIC_MEMBER_CONTRIBUTION,
+    RECORD_LIFECYCLE_PLAN_POSTURE, RECORD_SUBSTRATE_ASSOCIATION_HANDOFF,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -36,6 +37,7 @@ const RECORD_TTL_MS: u64 = 24 * 60 * 60 * 1000;
 #[serde(rename_all = "camelCase")]
 pub struct GatewayAssociationPosture {
     pub substrate_association_handoff: SubstrateAssociationHandoff,
+    pub association_boundary_proof: AssociationBoundaryProof,
     pub gateway_association_contribution: HostFabricMemberContribution,
     pub lifecycle_plan: LifecyclePlanPosture,
     pub fulfillment_plan: HostFabricFulfillmentPlan,
@@ -564,8 +566,8 @@ pub fn gateway_association_posture(
             "fabric-plan:gateway-association:{}",
             short_ref(&record.device_pk)
         ),
-        fabric_ref,
-        host_ref,
+        fabric_ref: fabric_ref.clone(),
+        host_ref: host_ref.clone(),
         contract_ref: "contract:gateway-association@0.1.0".to_string(),
         required_roles: vec![HostFabricRoleRequirement {
             role_ref: format!("role:{FABRIC_MEMBER_ROLE_GATEWAY_ASSOCIATION}"),
@@ -583,8 +585,49 @@ pub fn gateway_association_posture(
     })?
     .fulfillment_plan;
 
+    let association_boundary_proof = AssociationBoundaryProof {
+        kind: Some(RECORD_ASSOCIATION_BOUNDARY_PROOF.to_string()),
+        proof_id: format!(
+            "association-boundary-proof:gateway:{}",
+            short_ref(&record.device_pk)
+        ),
+        host_ref: host_ref.clone(),
+        owner_ref: record.identity_id.clone(),
+        fabric_ref: fabric_ref.clone(),
+        state: FABRIC_ASSOCIATION_BOUNDARY_PROOF_READY.to_string(),
+        substrate_handoff_ref: handoff.handoff_id.clone(),
+        initial_association_refs: handoff.initial_association_refs.clone(),
+        gateway_association_refs: handoff.gateway_association_refs.clone(),
+        route_association_refs: vec![format!(
+            "route-association:gateway:{}",
+            short_ref(&record.device_pk)
+        )],
+        service_presence_refs: vec![format!(
+            "service-presence:gateway:{}",
+            short_ref(&record.device_pk)
+        )],
+        membership_refs: vec![format!(
+            "member-presence:gateway:{}",
+            short_ref(&record.device_pk)
+        )],
+        fabric_plan_refs: vec![fulfillment_plan.plan_id.clone()],
+        evidence_refs: vec![format!(
+            "evidence:association-boundary:gateway:{}",
+            record.device_pk
+        )],
+        blocked_reasons: vec![],
+        safe_facts: json!({
+            "phaseSplit": "substrate-gateway-route-service-membership",
+            "servicePresenceSource": "gatewayDiscoveryRecord"
+        }),
+        observed_at,
+        expires_at: Some(observed_at + RECORD_TTL_MS),
+    };
+    validate_association_boundary_proof(&association_boundary_proof)?;
+
     Ok(GatewayAssociationPosture {
         substrate_association_handoff: handoff,
+        association_boundary_proof,
         gateway_association_contribution: contribution,
         lifecycle_plan,
         fulfillment_plan,
@@ -729,9 +772,31 @@ mod tests {
             posture.fulfillment_plan.association_handoff_ref,
             Some(posture.substrate_association_handoff.handoff_id.clone())
         );
+        assert_ne!(
+            posture
+                .association_boundary_proof
+                .initial_association_refs
+                .first(),
+            posture
+                .association_boundary_proof
+                .gateway_association_refs
+                .first()
+        );
+        assert_ne!(
+            posture
+                .association_boundary_proof
+                .gateway_association_refs
+                .first(),
+            posture.association_boundary_proof.membership_refs.first()
+        );
+        assert_eq!(
+            posture.association_boundary_proof.fabric_plan_refs,
+            vec![posture.fulfillment_plan.plan_id.clone()]
+        );
 
         let json = record.to_json();
         assert!(json.contains("\"gatewayAssociationPosture\""));
+        assert!(json.contains("\"association.boundary.proof\""));
         assert!(json.contains("\"hostFabric.member.contribution\""));
         assert!(json.contains("\"substrate.association.handoff\""));
     }
