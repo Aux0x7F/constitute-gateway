@@ -547,6 +547,7 @@ pub fn gateway_association_posture(
             LifecyclePhasePosture {
                 phase: FABRIC_LIFECYCLE_PHASE_SOURCE.to_string(),
                 state: FABRIC_LIFECYCLE_PHASE_READY.to_string(),
+                dependency_refs: Vec::new(),
                 evidence_refs: vec![format!("evidence:gateway-source:{}", record.device_pk)],
                 output_refs: vec![format!("source:gateway:{}", record.service_version)],
                 blocked_reasons: vec![],
@@ -555,6 +556,7 @@ pub fn gateway_association_posture(
             LifecyclePhasePosture {
                 phase: FABRIC_LIFECYCLE_PHASE_RUN.to_string(),
                 state: FABRIC_LIFECYCLE_PHASE_RUNNING.to_string(),
+                dependency_refs: Vec::new(),
                 evidence_refs: vec![format!("evidence:gateway-running:{}", record.device_pk)],
                 output_refs: vec![
                     gateway_association_ref.clone(),
@@ -568,6 +570,7 @@ pub fn gateway_association_posture(
             LifecyclePhasePosture {
                 phase: FABRIC_LIFECYCLE_PHASE_OBSERVE.to_string(),
                 state: FABRIC_LIFECYCLE_PHASE_READY.to_string(),
+                dependency_refs: Vec::new(),
                 evidence_refs: vec![format!("evidence:gateway-observed:{}", record.device_pk)],
                 output_refs: vec![
                     projection_ref.clone(),
@@ -579,6 +582,7 @@ pub fn gateway_association_posture(
                 safe_facts: Value::Null,
             },
         ],
+        dependency_edges: Vec::new(),
         member_contribution_refs: vec![contribution.contribution_id.clone()],
         evidence_refs: vec![format!(
             "evidence:lifecycle:gateway-association:{}",
