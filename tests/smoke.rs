@@ -2,6 +2,46 @@ use serde_json::Value;
 use std::time::Duration;
 
 #[test]
+fn gateway_reports_hardening_signal_and_network_exposure_posture() {
+    let signal = constitute_gateway::hardening::gateway_hardening_signal_observation(
+        constitute_gateway::hardening::GatewayHardeningSignalInput {
+            subject_ref: "host:lab-gateway".to_string(),
+            signal_kind: "firewall".to_string(),
+            state: "observed".to_string(),
+            severity: "info".to_string(),
+            authority_refs: vec!["authority:ops".to_string()],
+            event_refs: vec!["event:firewall:gateway-temp-rule".to_string()],
+            detail_refs: Vec::new(),
+            storage_refs: Vec::new(),
+            evidence_refs: vec!["evidence:firewall:gateway-temp-rule".to_string()],
+            blocked_reasons: Vec::new(),
+            observed_at: 1_700_000_100,
+            expires_at: Some(1_700_003_700),
+        },
+    )
+    .expect("hardening signal posture");
+    assert_eq!(signal.observer_ref, "constitute-gateway");
+    assert_eq!(signal.signal_kind, "firewall");
+
+    let exposure = constitute_gateway::hardening::gateway_network_exposure_posture(
+        "host:lab-gateway",
+        vec!["route:gateway:quic".to_string()],
+        vec!["udp:7447".to_string()],
+        vec!["firewall:gateway:temp-rule".to_string()],
+        vec!["ingress:gateway:quic".to_string()],
+        vec![signal.observation_id],
+        vec!["evidence:netstat:gateway".to_string()],
+        1_700_000_101,
+        Some(1_700_003_701),
+    )
+    .expect("network exposure posture");
+    assert_eq!(exposure.state, "guarded");
+    assert!(exposure
+        .firewall_posture_refs
+        .contains(&"firewall:gateway:temp-rule".to_string()));
+}
+
+#[test]
 fn gateway_reports_mitigation_recommendation_consumer_posture() {
     let recommendation = constitute_protocol::CybersecMitigationRecommendationRecord {
         kind: Some(constitute_protocol::RECORD_CYBERSEC_MITIGATION_RECOMMENDATION.to_string()),

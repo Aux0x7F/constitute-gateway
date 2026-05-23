@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "constitute-fabric"
 version = "0.1.0"
-source = "git+https://github.com/Aux0x7F/constitute-fabric?branch=main#436dc9df1c40f74d59d75af460a0f44cd6cd61ba"
+source = "git+https://github.com/Aux0x7F/constitute-fabric?branch=0x%2Fhardening-posture#6295f4028c774e375f2e783305784dc2dbc7adad"
 dependencies = [
  "anyhow",
  "constitute-protocol",
@@ -1068,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "constitute-protocol"
 version = "0.1.0"
-source = "git+https://github.com/Aux0x7F/constitute-protocol?branch=main#86bcf9988d79057ad3d567ce805ba22c7dcc094f"
+source = "git+https://github.com/Aux0x7F/constitute-protocol?branch=0x%2Fhardening-posture#be88aeb86977b1980901f3ec1a936f7254d89519"
 dependencies = [
  "anyhow",
  "base64",

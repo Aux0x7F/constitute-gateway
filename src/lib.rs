@@ -9,6 +9,8 @@
 
 /// Discovery schemas and publication helpers.
 pub mod discovery;
+/// Gateway hardening observations and network exposure posture.
+pub mod hardening;
 /// Encrypted key and sensitive state storage.
 pub mod keystore;
 /// Local websocket relay for browser-side clients.
