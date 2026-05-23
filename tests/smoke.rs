@@ -42,6 +42,34 @@ fn gateway_reports_hardening_signal_and_network_exposure_posture() {
 }
 
 #[test]
+fn gateway_composes_hardening_observation_fixture() {
+    let fixture =
+        constitute_gateway::hardening::gateway_hardening_observation_fixture(1_700_000_100)
+            .expect("gateway hardening fixture");
+
+    assert_eq!(fixture.signal.observer_ref, "constitute-gateway");
+    assert_eq!(fixture.signal.subject_ref, "gateway:route:edge");
+    assert_eq!(fixture.network_exposure.state, "guarded");
+    assert!(fixture
+        .network_exposure
+        .signal_observation_refs
+        .contains(&fixture.signal.observation_id));
+    assert_eq!(
+        fixture.mitigation_recommendation.target_ref,
+        fixture.network_exposure.posture_id
+    );
+    assert_eq!(
+        fixture.mitigation_consumer.consumer_ref,
+        "constitute-gateway"
+    );
+    assert_eq!(fixture.mitigation_consumer.state, "actionable");
+    assert_eq!(
+        fixture.mitigation_consumer.safe_facts["recommendationOnly"],
+        true
+    );
+}
+
+#[test]
 fn gateway_reports_mitigation_recommendation_consumer_posture() {
     let recommendation = constitute_protocol::CybersecMitigationRecommendationRecord {
         kind: Some(constitute_protocol::RECORD_CYBERSEC_MITIGATION_RECOMMENDATION.to_string()),
