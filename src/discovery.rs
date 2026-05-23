@@ -447,6 +447,10 @@ pub fn gateway_association_posture(
     let fabric_ref = gateway_fabric_ref(record);
     let host_ref = gateway_host_ref(record);
     let gateway_association_ref = gateway_association_ref(record);
+    let route_association_ref = gateway_route_association_ref(record);
+    let service_presence_ref = gateway_service_presence_ref(record);
+    let member_presence_ref = gateway_member_presence_ref(record);
+    let projection_ref = format!("projection:gateway-association:{}", record.device_pk);
     let handoff = SubstrateAssociationHandoff {
         kind: Some(RECORD_SUBSTRATE_ASSOCIATION_HANDOFF.to_string()),
         handoff_id: format!(
@@ -493,11 +497,18 @@ pub fn gateway_association_posture(
         capability_refs: vec!["gateway.association.fulfill".to_string()],
         grant_refs: vec![format!("grant:gateway-association:{}", record.identity_id)],
         input_refs: vec![handoff.handoff_id.clone()],
-        output_refs: vec![format!(
-            "projection:gateway-association:{}",
-            record.device_pk
-        )],
-        evidence_refs: vec![format!("evidence:gateway-presence:{}", record.device_pk)],
+        output_refs: vec![
+            projection_ref.clone(),
+            route_association_ref.clone(),
+            service_presence_ref.clone(),
+            member_presence_ref.clone(),
+        ],
+        evidence_refs: vec![
+            format!("evidence:gateway-presence:{}", record.device_pk),
+            format!("evidence:route-association:{}", record.device_pk),
+            format!("evidence:service-presence:{}", record.device_pk),
+            format!("evidence:member-presence:{}", record.device_pk),
+        ],
         lifecycle_plan_refs: vec![format!(
             "lifecycle-plan:gateway-association:{}",
             short_ref(&record.device_pk)
@@ -535,7 +546,12 @@ pub fn gateway_association_posture(
                 phase: FABRIC_LIFECYCLE_PHASE_RUN.to_string(),
                 state: FABRIC_LIFECYCLE_PHASE_RUNNING.to_string(),
                 evidence_refs: vec![format!("evidence:gateway-running:{}", record.device_pk)],
-                output_refs: vec![gateway_association_ref.clone()],
+                output_refs: vec![
+                    gateway_association_ref.clone(),
+                    route_association_ref.clone(),
+                    service_presence_ref.clone(),
+                    member_presence_ref.clone(),
+                ],
                 blocked_reasons: vec![],
                 safe_facts: Value::Null,
             },
@@ -543,7 +559,12 @@ pub fn gateway_association_posture(
                 phase: FABRIC_LIFECYCLE_PHASE_OBSERVE.to_string(),
                 state: FABRIC_LIFECYCLE_PHASE_READY.to_string(),
                 evidence_refs: vec![format!("evidence:gateway-observed:{}", record.device_pk)],
-                output_refs: vec!["projection:gateway-association:hot".to_string()],
+                output_refs: vec![
+                    projection_ref.clone(),
+                    route_association_ref.clone(),
+                    service_presence_ref.clone(),
+                    member_presence_ref.clone(),
+                ],
                 blocked_reasons: vec![],
                 safe_facts: Value::Null,
             },
@@ -598,18 +619,9 @@ pub fn gateway_association_posture(
         substrate_handoff_ref: handoff.handoff_id.clone(),
         initial_association_refs: handoff.initial_association_refs.clone(),
         gateway_association_refs: handoff.gateway_association_refs.clone(),
-        route_association_refs: vec![format!(
-            "route-association:gateway:{}",
-            short_ref(&record.device_pk)
-        )],
-        service_presence_refs: vec![format!(
-            "service-presence:gateway:{}",
-            short_ref(&record.device_pk)
-        )],
-        membership_refs: vec![format!(
-            "member-presence:gateway:{}",
-            short_ref(&record.device_pk)
-        )],
+        route_association_refs: vec![route_association_ref.clone()],
+        service_presence_refs: vec![service_presence_ref.clone()],
+        membership_refs: vec![member_presence_ref.clone()],
         fabric_plan_refs: vec![fulfillment_plan.plan_id.clone()],
         evidence_refs: vec![format!(
             "evidence:association-boundary:gateway:{}",
@@ -647,6 +659,18 @@ fn gateway_association_ref(record: &SwarmDeviceRecord) -> String {
         "association:gateway:{}:ongoing",
         short_ref(&record.device_pk)
     )
+}
+
+fn gateway_route_association_ref(record: &SwarmDeviceRecord) -> String {
+    format!("route-association:gateway:{}", short_ref(&record.device_pk))
+}
+
+fn gateway_service_presence_ref(record: &SwarmDeviceRecord) -> String {
+    format!("service-presence:gateway:{}", short_ref(&record.device_pk))
+}
+
+fn gateway_member_presence_ref(record: &SwarmDeviceRecord) -> String {
+    format!("member-presence:gateway:{}", short_ref(&record.device_pk))
 }
 
 fn short_ref(value: &str) -> String {
@@ -793,11 +817,26 @@ mod tests {
             posture.association_boundary_proof.fabric_plan_refs,
             vec![posture.fulfillment_plan.plan_id.clone()]
         );
+        assert!(posture
+            .gateway_association_contribution
+            .output_refs
+            .contains(&posture.association_boundary_proof.route_association_refs[0]));
+        assert!(posture
+            .gateway_association_contribution
+            .output_refs
+            .contains(&posture.association_boundary_proof.service_presence_refs[0]));
+        assert!(posture
+            .gateway_association_contribution
+            .output_refs
+            .contains(&posture.association_boundary_proof.membership_refs[0]));
 
         let json = record.to_json();
         assert!(json.contains("\"gatewayAssociationPosture\""));
         assert!(json.contains("\"association.boundary.proof\""));
         assert!(json.contains("\"hostFabric.member.contribution\""));
         assert!(json.contains("\"substrate.association.handoff\""));
+        assert!(json.contains("route-association:gateway"));
+        assert!(json.contains("service-presence:gateway"));
+        assert!(json.contains("member-presence:gateway"));
     }
 }
