@@ -84,7 +84,9 @@ pub fn gateway_mitigation_consumer_posture(
             "actionSupported": supports_action
         }),
         observed_at,
-        expires_at: recommendation.expires_at,
+        expires_at: recommendation
+            .expires_at
+            .filter(|expires_at| *expires_at > observed_at),
     };
     validate_cybersec_mitigation_consumer_posture(&posture)?;
     Ok(posture)

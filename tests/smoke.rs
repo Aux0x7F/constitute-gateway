@@ -82,6 +82,32 @@ fn gateway_reports_mitigation_recommendation_consumer_posture() {
     .expect("unsupported posture");
     assert_eq!(posture.state, "unsupported");
     assert_eq!(posture.blocked_reasons, vec!["notTargetedToGateway"]);
+
+    let waiting_authority = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &untargeted,
+        Vec::new(),
+        1_700_000_001,
+    )
+    .expect("unsupported still wins before authority");
+    assert_eq!(waiting_authority.state, "unsupported");
+
+    let mut waiting = untargeted;
+    waiting.consumer_refs = vec!["constitute-gateway".to_string()];
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &waiting,
+        Vec::new(),
+        1_700_000_001,
+    )
+    .expect("waiting authority posture");
+    assert_eq!(posture.state, "waitingAuthority");
+
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &waiting,
+        vec!["authority:gateway-mitigation".to_string()],
+        1_700_000_700,
+    )
+    .expect("expired posture");
+    assert_eq!(posture.state, "expired");
 }
 
 #[test]
