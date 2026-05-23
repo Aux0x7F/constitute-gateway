@@ -12,7 +12,7 @@ use constitute_protocol::{
     CarrierEdgeSessionEvidence, MemberPresence, SwarmAck, SwarmEdgeAccept, SwarmEdgeHello,
     SwarmEdgeResume, SwarmFrame, SwarmFrameBody, SwarmFrameKind, SwarmRecordRef, ZoneScope,
     CAPABILITY_PROJECTION_OBSERVE, CAPABILITY_SWARM_EDGE_ATTACH, CARRIER_EDGE_ADAPTER_WEB_SOCKET,
-    CARRIER_EDGE_BACKPRESSURE_CLEAR, CARRIER_EDGE_SESSION_OPEN,
+    CARRIER_EDGE_BACKPRESSURE_CLEAR, CARRIER_EDGE_NETWORK_LOCAL_NETWORK, CARRIER_EDGE_SESSION_OPEN,
     RECORD_CARRIER_EDGE_SESSION_EVIDENCE, RECORD_MEMBER_PRESENCE, SWARM_FRAME_VERSION,
 };
 use serde::{Deserialize, Serialize};
@@ -1659,12 +1659,22 @@ fn carrier_edge_session_evidence_for_gateway(
         adapter_kind: CARRIER_EDGE_ADAPTER_WEB_SOCKET.to_string(),
         participant_ref: format!("gateway:{gateway_pk}"),
         peer_ref: Some(member_ref.to_string()),
+        session_binding_ref: Some(format!("binding:gateway-edge:{session_id}")),
+        network_sensitivity: Some(CARRIER_EDGE_NETWORK_LOCAL_NETWORK.to_string()),
         state: CARRIER_EDGE_SESSION_OPEN.to_string(),
         connection_state: Some("connected".to_string()),
         backpressure_state: Some(CARRIER_EDGE_BACKPRESSURE_CLEAR.to_string()),
         retry_posture: json!({
             "state": "notRequired",
             "retryAfterMs": null
+        }),
+        reconnect_posture: json!({
+            "state": "idle",
+            "retryAfterMs": null
+        }),
+        close_posture: json!({
+            "state": "held",
+            "reason": ""
         }),
         release_posture: json!({
             "state": "held",
@@ -1679,6 +1689,8 @@ fn carrier_edge_session_evidence_for_gateway(
             "source": "attachedSessionObservation"
         }),
         evidence_refs,
+        proof_substrate_refs: vec![],
+        resource_posture_refs: vec![],
         blocked_reasons: vec![],
         observed_at: now,
         expires_at: session.expires_at,
