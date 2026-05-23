@@ -1021,7 +1021,7 @@ dependencies = [
 [[package]]
 name = "constitute-fabric"
 version = "0.1.0"
-source = "git+https://github.com/Aux0x7F/constitute-fabric?branch=0x%2Ffabric-transition%2Fcarrier-edge#6c1e4e64810668e24430d560be22b5bd612fd998"
+source = "git+https://github.com/Aux0x7F/constitute-fabric?branch=0x%2Ffabric-transition%2Fcarrier-edge#7842aa15617cb74e73e476873807e50b3e27a253"
 dependencies = [
  "anyhow",
  "constitute-protocol",
