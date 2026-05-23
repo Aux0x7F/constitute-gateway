@@ -11,8 +11,8 @@ operator-gui = ["dep:eframe"]
 
 [dependencies]
 anyhow = "1"
-constitute-fabric = { git = "https://github.com/Aux0x7F/constitute-fabric", branch = "0x/cybersec-processor/fabric-protocol-sync" }
-constitute-protocol = { git = "https://github.com/Aux0x7F/constitute-protocol", branch = "0x/cybersec-processor/protocol-posture" }
+constitute-fabric = { git = "https://github.com/Aux0x7F/constitute-fabric", branch = "main" }
+constitute-protocol = { git = "https://github.com/Aux0x7F/constitute-protocol", branch = "main" }
 argon2 = "0.5"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
