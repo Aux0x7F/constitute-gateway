@@ -4,10 +4,12 @@ use constitute_gateway::swarm_edge::{
     SwarmEdgeMemberKind, SwarmEdgeRecord, SwarmEdgeResumeResult, SwarmEdgeStatus, SwarmRouteMember,
 };
 use constitute_protocol::{
-    swarm_frame_id, SwarmEdgeAccept, SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody,
-    SwarmFrameKind, SwarmRecordRef, ZoneScope, CAPABILITY_MEDIA_STREAM_PREVIEW,
-    CAPABILITY_PROJECTION_OBSERVE, CAPABILITY_SERVICE_INTENT_INVOKE,
-    CAPABILITY_STREAM_SESSION_OFFER, CAPABILITY_SWARM_EDGE_ATTACH, SWARM_FRAME_VERSION,
+    swarm_frame_id, validate_carrier_edge_session_evidence, SwarmEdgeAccept, SwarmEdgeHello,
+    SwarmEdgeResume, SwarmFrame, SwarmFrameBody, SwarmFrameKind, SwarmRecordRef, ZoneScope,
+    CAPABILITY_MEDIA_STREAM_PREVIEW, CAPABILITY_PROJECTION_OBSERVE,
+    CAPABILITY_SERVICE_INTENT_INVOKE, CAPABILITY_STREAM_SESSION_OFFER,
+    CAPABILITY_SWARM_EDGE_ATTACH, CARRIER_EDGE_ADAPTER_WEB_SOCKET, CARRIER_EDGE_BACKPRESSURE_CLEAR,
+    CARRIER_EDGE_SESSION_OPEN, SWARM_FRAME_VERSION,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -579,6 +581,31 @@ fn swarm_edge_hub_accepts_browser_service_cli_and_routes_only_swarm_frames() {
     };
     assert!(!hub.is_active_session_for_member(&service_session, SERVICE_PK));
     assert!(hub.is_active_session_for_member(&next_service_session, SERVICE_PK));
+    let carrier_evidence = hub
+        .carrier_edge_session_evidence(NOW)
+        .expect("carrier edge session evidence");
+    assert_eq!(carrier_evidence.len(), 3);
+    assert!(carrier_evidence
+        .iter()
+        .all(|evidence| validate_carrier_edge_session_evidence(evidence).is_ok()));
+    let service_evidence = carrier_evidence
+        .iter()
+        .find(|evidence| evidence.peer_ref.as_deref() == Some(SERVICE_PK))
+        .expect("service carrier evidence");
+    assert_eq!(
+        service_evidence.adapter_kind,
+        CARRIER_EDGE_ADAPTER_WEB_SOCKET
+    );
+    assert_eq!(service_evidence.state, CARRIER_EDGE_SESSION_OPEN);
+    assert_eq!(
+        service_evidence.backpressure_state.as_deref(),
+        Some(CARRIER_EDGE_BACKPRESSURE_CLEAR)
+    );
+    assert_eq!(
+        service_evidence.adapter_ref,
+        "adapter:gateway-association:websocket"
+    );
+    assert!(service_evidence.selection_ref.contains(SERVICE_PK));
 
     let resumed = hub.resume_member(
         SwarmEdgeMemberKind::Cli,
