@@ -13,6 +13,8 @@ pub mod discovery;
 pub mod keystore;
 /// Local websocket relay for browser-side clients.
 pub mod local_relay;
+/// Report-only cybersec mitigation recommendation consumer posture.
+pub mod mitigation;
 /// Nostr bootstrap/fallback key/event/signature helpers used across gateway modules.
 pub mod nostr;
 /// Platform-specific setup and default paths.

@@ -2,6 +2,49 @@ use serde_json::Value;
 use std::time::Duration;
 
 #[test]
+fn gateway_reports_mitigation_recommendation_consumer_posture() {
+    let recommendation = constitute_protocol::CybersecMitigationRecommendationRecord {
+        kind: Some(constitute_protocol::RECORD_CYBERSEC_MITIGATION_RECOMMENDATION.to_string()),
+        recommendation_id: "cybersec:recommendation:media-path:request-evidence".to_string(),
+        finding_ref: "cybersec:finding:media-path".to_string(),
+        processor_report_ref: "event-fabric-report:logging.cybersec.bootstrap".to_string(),
+        recommender_ref: "processor:constitute-cybersec".to_string(),
+        action_kind: "requestEvidence".to_string(),
+        target_ref: "runtime:media-path:1".to_string(),
+        state: "recommended".to_string(),
+        authority_refs: vec!["authority:security-ops".to_string()],
+        consumer_refs: vec!["constitute-gateway".to_string()],
+        evidence_refs: vec!["cybersec:finding:media-path".to_string()],
+        safe_facts: serde_json::json!({ "recommendationOnly": true }),
+        blocked_reasons: Vec::new(),
+        issued_at: 1_700_000_000,
+        expires_at: Some(1_700_000_600),
+    };
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &recommendation,
+        vec!["authority:gateway-mitigation".to_string()],
+        1_700_000_001,
+    )
+    .expect("posture");
+    assert_eq!(posture.state, "actionable");
+    assert_eq!(posture.recommendation_ref, recommendation.recommendation_id);
+    assert!(posture
+        .supported_action_kinds
+        .contains(&"requestEvidence".to_string()));
+
+    let mut untargeted = recommendation;
+    untargeted.consumer_refs = vec!["constitute-moderation".to_string()];
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &untargeted,
+        vec!["authority:gateway-mitigation".to_string()],
+        1_700_000_001,
+    )
+    .expect("unsupported posture");
+    assert_eq!(posture.state, "unsupported");
+    assert_eq!(posture.blocked_reasons, vec!["notTargetedToGateway"]);
+}
+
+#[test]
 fn discovery_envelope_shape() {
     let record = constitute_gateway::discovery::SwarmDeviceRecord::new(
         "pk-test",
