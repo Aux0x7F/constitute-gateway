@@ -6,14 +6,15 @@
 // domain-owned-vocabulary: swarm.directory swarm.directory.live swarm.route
 
 use anyhow::{anyhow, Result};
+use constitute_fabric::{
+    build_gateway_websocket_carrier_session_evidence, GatewayWebSocketCarrierSessionEvidenceInput,
+};
 use constitute_protocol::{
-    swarm_frame_id, validate_carrier_edge_session_evidence, validate_member_presence,
-    validate_swarm_edge_hello, validate_swarm_edge_resume, validate_swarm_frame,
-    CarrierEdgeSessionEvidence, MemberPresence, SwarmAck, SwarmEdgeAccept, SwarmEdgeHello,
-    SwarmEdgeResume, SwarmFrame, SwarmFrameBody, SwarmFrameKind, SwarmRecordRef, ZoneScope,
-    CAPABILITY_PROJECTION_OBSERVE, CAPABILITY_SWARM_EDGE_ATTACH, CARRIER_EDGE_ADAPTER_WEB_SOCKET,
-    CARRIER_EDGE_BACKPRESSURE_CLEAR, CARRIER_EDGE_NETWORK_LOCAL_NETWORK, CARRIER_EDGE_SESSION_OPEN,
-    RECORD_CARRIER_EDGE_SESSION_EVIDENCE, RECORD_MEMBER_PRESENCE, SWARM_FRAME_VERSION,
+    swarm_frame_id, validate_member_presence, validate_swarm_edge_hello,
+    validate_swarm_edge_resume, validate_swarm_frame, CarrierEdgeSessionEvidence, MemberPresence,
+    SwarmAck, SwarmEdgeAccept, SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody,
+    SwarmFrameKind, SwarmRecordRef, ZoneScope, CAPABILITY_PROJECTION_OBSERVE,
+    CAPABILITY_SWARM_EDGE_ATTACH, RECORD_MEMBER_PRESENCE, SWARM_FRAME_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1646,8 +1647,7 @@ fn carrier_edge_session_evidence_for_gateway(
     evidence_refs.sort();
     evidence_refs.dedup();
 
-    let record = CarrierEdgeSessionEvidence {
-        kind: Some(RECORD_CARRIER_EDGE_SESSION_EVIDENCE.to_string()),
+    build_gateway_websocket_carrier_session_evidence(GatewayWebSocketCarrierSessionEvidenceInput {
         evidence_id: format!(
             "carrier-edge-evidence:{}:{}",
             slug(gateway_pk),
@@ -1655,31 +1655,9 @@ fn carrier_edge_session_evidence_for_gateway(
         ),
         selection_ref: format!("carrier-select:{}:gateway-edge", slug(subject_ref)),
         edge_session_ref: format!("edge-session:{session_id}"),
-        adapter_ref: "adapter:gateway-association:websocket".to_string(),
-        adapter_kind: CARRIER_EDGE_ADAPTER_WEB_SOCKET.to_string(),
         participant_ref: format!("gateway:{gateway_pk}"),
         peer_ref: Some(member_ref.to_string()),
-        session_binding_ref: Some(format!("binding:gateway-edge:{session_id}")),
-        network_sensitivity: Some(CARRIER_EDGE_NETWORK_LOCAL_NETWORK.to_string()),
-        state: CARRIER_EDGE_SESSION_OPEN.to_string(),
-        connection_state: Some("connected".to_string()),
-        backpressure_state: Some(CARRIER_EDGE_BACKPRESSURE_CLEAR.to_string()),
-        retry_posture: json!({
-            "state": "notRequired",
-            "retryAfterMs": null
-        }),
-        reconnect_posture: json!({
-            "state": "idle",
-            "retryAfterMs": null
-        }),
-        close_posture: json!({
-            "state": "held",
-            "reason": ""
-        }),
-        release_posture: json!({
-            "state": "held",
-            "expiresAt": session.expires_at
-        }),
+        session_binding_ref: format!("binding:gateway-edge:{session_id}"),
         safe_facts: json!({
             "memberKind": member_kind_label(member_kind),
             "serviceRef": service_ref,
@@ -1691,12 +1669,9 @@ fn carrier_edge_session_evidence_for_gateway(
         evidence_refs,
         proof_substrate_refs: vec![],
         resource_posture_refs: vec![],
-        blocked_reasons: vec![],
         observed_at: now,
         expires_at: session.expires_at,
-    };
-    validate_carrier_edge_session_evidence(&record)?;
-    Ok(record)
+    })
 }
 
 fn carrier_edge_service_ref(session: &SwarmEdgeSession) -> Option<String> {
