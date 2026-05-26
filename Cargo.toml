@@ -11,8 +11,8 @@ operator-gui = ["dep:eframe"]
 
 [dependencies]
 anyhow = "1"
-constitute-fabric = { git = "https://github.com/Aux0x7F/constitute-fabric", branch = "0x/fabric-transition/topology-execution" }
-constitute-protocol = { git = "https://github.com/Aux0x7F/constitute-protocol", branch = "0x/fabric-transition/topology-execution" }
+constitute-fabric = { path = "../constitute-fabric" }
+constitute-protocol = { path = "../constitute-protocol" }
 argon2 = "0.5"
 base64 = "0.22"
 chacha20poly1305 = "0.10"
@@ -44,4 +44,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 
 [dev-dependencies]
 tokio = { version = "1", features = ["time", "net", "sync"] }
+
+[patch."https://github.com/Aux0x7F/constitute-protocol"]
+constitute-protocol = { path = "../constitute-protocol" }
 
