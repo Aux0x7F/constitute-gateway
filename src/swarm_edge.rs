@@ -6,12 +6,15 @@
 // domain-owned-vocabulary: swarm.directory swarm.directory.live swarm.route
 
 use anyhow::{anyhow, Result};
+use constitute_fabric::{
+    build_gateway_websocket_carrier_session_evidence, GatewayWebSocketCarrierSessionEvidenceInput,
+};
 use constitute_protocol::{
     swarm_frame_id, validate_member_presence, validate_swarm_edge_hello,
-    validate_swarm_edge_resume, validate_swarm_frame, MemberPresence, SwarmAck, SwarmEdgeAccept,
-    SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody, SwarmFrameKind, SwarmRecordRef,
-    ZoneScope, CAPABILITY_PROJECTION_OBSERVE, CAPABILITY_SWARM_EDGE_ATTACH, RECORD_MEMBER_PRESENCE,
-    SWARM_FRAME_VERSION,
+    validate_swarm_edge_resume, validate_swarm_frame, CarrierEdgeSessionEvidence, MemberPresence,
+    SwarmAck, SwarmEdgeAccept, SwarmEdgeHello, SwarmEdgeResume, SwarmFrame, SwarmFrameBody,
+    SwarmFrameKind, SwarmRecordRef, ZoneScope, CAPABILITY_PROJECTION_OBSERVE,
+    CAPABILITY_SWARM_EDGE_ATTACH, RECORD_MEMBER_PRESENCE, SWARM_FRAME_VERSION,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -1163,6 +1166,44 @@ impl SwarmEdgeHub {
         self.session_kinds.get(session_id).copied()
     }
 
+    pub fn carrier_edge_session_evidence(
+        &self,
+        now: u64,
+    ) -> Result<Vec<CarrierEdgeSessionEvidence>> {
+        let mut sessions = self
+            .core
+            .sessions
+            .values()
+            .filter(|session| {
+                self.active_sessions.contains(session.session_id.trim())
+                    && !session_is_expired(session, now)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        sessions.sort_by(|left, right| {
+            left.member_ref
+                .cmp(&right.member_ref)
+                .then_with(|| left.session_id.cmp(&right.session_id))
+        });
+
+        sessions
+            .into_iter()
+            .map(|session| {
+                let member_kind = self
+                    .session_kinds
+                    .get(session.session_id.trim())
+                    .copied()
+                    .unwrap_or(SwarmEdgeMemberKind::Gateway);
+                carrier_edge_session_evidence_for_gateway(
+                    self.core.gateway_pk.trim(),
+                    &session,
+                    member_kind,
+                    now,
+                )
+            })
+            .collect()
+    }
+
     pub fn directory_value(&self, now: u64) -> Value {
         let mut definitions = BTreeMap::<String, Value>::new();
         let mut channels = BTreeMap::<String, Value>::new();
@@ -1170,6 +1211,12 @@ impl SwarmEdgeHub {
         let mut membership_truth = Vec::<Value>::new();
         let mut advertisements = Vec::<Value>::new();
         let mut entries = Vec::<Value>::new();
+        let carrier_edge_session_evidence = self
+            .carrier_edge_session_evidence(now)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|record| serde_json::to_value(record).ok())
+            .collect::<Vec<_>>();
         let mut sessions = self
             .core
             .sessions
@@ -1313,6 +1360,7 @@ impl SwarmEdgeHub {
             "definitions": definitions.into_values().collect::<Vec<_>>(),
             "advertisements": advertisements,
             "entries": entries,
+            "carrierEdgeSessionEvidence": carrier_edge_session_evidence,
             "channels": channels.into_values().collect::<Vec<_>>(),
             "policies": policies.into_values().collect::<Vec<_>>(),
         })
@@ -1577,6 +1625,71 @@ fn slug(value: &str) -> String {
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
         .join("-")
+}
+
+fn carrier_edge_session_evidence_for_gateway(
+    gateway_pk: &str,
+    session: &SwarmEdgeSession,
+    member_kind: SwarmEdgeMemberKind,
+    now: u64,
+) -> Result<CarrierEdgeSessionEvidence> {
+    let member_ref = session.member_ref.trim();
+    let session_id = session.session_id.trim();
+    let service_ref = carrier_edge_service_ref(session);
+    let subject_ref = service_ref.as_deref().unwrap_or(member_ref);
+    let mut evidence_refs = vec![
+        format!("session:{session_id}"),
+        format!("member-presence:{}:{}", slug(member_ref), slug(session_id)),
+    ];
+    if let Some(service_ref) = &service_ref {
+        evidence_refs.push(service_ref.clone());
+    }
+    evidence_refs.sort();
+    evidence_refs.dedup();
+
+    build_gateway_websocket_carrier_session_evidence(GatewayWebSocketCarrierSessionEvidenceInput {
+        evidence_id: format!(
+            "carrier-edge-evidence:{}:{}",
+            slug(gateway_pk),
+            slug(session_id)
+        ),
+        selection_ref: format!("carrier-select:{}:gateway-edge", slug(subject_ref)),
+        edge_session_ref: format!("edge-session:{session_id}"),
+        participant_ref: format!("gateway:{gateway_pk}"),
+        peer_ref: Some(member_ref.to_string()),
+        session_binding_ref: format!("binding:gateway-edge:{session_id}"),
+        safe_facts: json!({
+            "memberKind": member_kind_label(member_kind),
+            "serviceRef": service_ref,
+            "capabilityCount": unique_non_empty_strings(&session.capability_refs).len(),
+            "channelCount": unique_non_empty_strings(&session.channel_refs).len(),
+            "promiseCount": unique_non_empty_strings(&session.promise_refs).len(),
+            "source": "attachedSessionObservation"
+        }),
+        evidence_refs,
+        proof_substrate_refs: vec![],
+        resource_posture_refs: vec![],
+        observed_at: now,
+        expires_at: session.expires_at,
+    })
+}
+
+fn carrier_edge_service_ref(session: &SwarmEdgeSession) -> Option<String> {
+    session
+        .promise_refs
+        .iter()
+        .map(|reference| reference.trim())
+        .find(|reference| reference.starts_with("service:"))
+        .map(ToString::to_string)
+}
+
+fn member_kind_label(member_kind: SwarmEdgeMemberKind) -> &'static str {
+    match member_kind {
+        SwarmEdgeMemberKind::Browser => "browser",
+        SwarmEdgeMemberKind::Service => "service",
+        SwarmEdgeMemberKind::Cli => "cli",
+        SwarmEdgeMemberKind::Gateway => "gateway",
+    }
 }
 
 fn reject_result(reason_code: &str, err: anyhow::Error) -> SwarmEdgeReject {

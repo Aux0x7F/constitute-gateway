@@ -2,6 +2,74 @@ use serde_json::Value;
 use std::time::Duration;
 
 #[test]
+fn gateway_reports_hardening_signal_and_network_exposure_posture() {
+    let signal = constitute_gateway::hardening::gateway_hardening_signal_observation(
+        constitute_gateway::hardening::GatewayHardeningSignalInput {
+            subject_ref: "host:lab-gateway".to_string(),
+            signal_kind: "firewall".to_string(),
+            state: "observed".to_string(),
+            severity: "info".to_string(),
+            authority_refs: vec!["authority:ops".to_string()],
+            event_refs: vec!["event:firewall:gateway-temp-rule".to_string()],
+            detail_refs: Vec::new(),
+            storage_refs: Vec::new(),
+            evidence_refs: vec!["evidence:firewall:gateway-temp-rule".to_string()],
+            blocked_reasons: Vec::new(),
+            observed_at: 1_700_000_100,
+            expires_at: Some(1_700_003_700),
+        },
+    )
+    .expect("hardening signal posture");
+    assert_eq!(signal.observer_ref, "constitute-gateway");
+    assert_eq!(signal.signal_kind, "firewall");
+
+    let exposure = constitute_gateway::hardening::gateway_network_exposure_posture(
+        "host:lab-gateway",
+        vec!["route:gateway:quic".to_string()],
+        vec!["udp:7447".to_string()],
+        vec!["firewall:gateway:temp-rule".to_string()],
+        vec!["ingress:gateway:quic".to_string()],
+        vec![signal.observation_id],
+        vec!["evidence:netstat:gateway".to_string()],
+        1_700_000_101,
+        Some(1_700_003_701),
+    )
+    .expect("network exposure posture");
+    assert_eq!(exposure.state, "guarded");
+    assert!(exposure
+        .firewall_posture_refs
+        .contains(&"firewall:gateway:temp-rule".to_string()));
+}
+
+#[test]
+fn gateway_composes_hardening_observation_fixture() {
+    let fixture =
+        constitute_gateway::hardening::gateway_hardening_observation_fixture(1_700_000_100)
+            .expect("gateway hardening fixture");
+
+    assert_eq!(fixture.signal.observer_ref, "constitute-gateway");
+    assert_eq!(fixture.signal.subject_ref, "gateway:route:edge");
+    assert_eq!(fixture.network_exposure.state, "guarded");
+    assert!(fixture
+        .network_exposure
+        .signal_observation_refs
+        .contains(&fixture.signal.observation_id));
+    assert_eq!(
+        fixture.mitigation_recommendation.target_ref,
+        fixture.network_exposure.posture_id
+    );
+    assert_eq!(
+        fixture.mitigation_consumer.consumer_ref,
+        "constitute-gateway"
+    );
+    assert_eq!(fixture.mitigation_consumer.state, "actionable");
+    assert_eq!(
+        fixture.mitigation_consumer.safe_facts["recommendationOnly"],
+        true
+    );
+}
+
+#[test]
 fn gateway_reports_mitigation_recommendation_consumer_posture() {
     let recommendation = constitute_protocol::CybersecMitigationRecommendationRecord {
         kind: Some(constitute_protocol::RECORD_CYBERSEC_MITIGATION_RECOMMENDATION.to_string()),
@@ -42,6 +110,32 @@ fn gateway_reports_mitigation_recommendation_consumer_posture() {
     .expect("unsupported posture");
     assert_eq!(posture.state, "unsupported");
     assert_eq!(posture.blocked_reasons, vec!["notTargetedToGateway"]);
+
+    let waiting_authority = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &untargeted,
+        Vec::new(),
+        1_700_000_001,
+    )
+    .expect("unsupported still wins before authority");
+    assert_eq!(waiting_authority.state, "unsupported");
+
+    let mut waiting = untargeted;
+    waiting.consumer_refs = vec!["constitute-gateway".to_string()];
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &waiting,
+        Vec::new(),
+        1_700_000_001,
+    )
+    .expect("waiting authority posture");
+    assert_eq!(posture.state, "waitingAuthority");
+
+    let posture = constitute_gateway::mitigation::gateway_mitigation_consumer_posture(
+        &waiting,
+        vec!["authority:gateway-mitigation".to_string()],
+        1_700_000_700,
+    )
+    .expect("expired posture");
+    assert_eq!(posture.state, "expired");
 }
 
 #[test]
